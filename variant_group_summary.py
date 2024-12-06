@@ -141,6 +141,13 @@ def process_file(input_file, gene, chromosome, output_dir):
         print(f"Reading file: {input_file}")
         df = pd.read_csv(input_file, sep='\t')
         
+        #Remove duplicates in Uploaded_variation column
+        print("Before deduplication:", df['Uploaded_variation'].nunique())
+
+        df = df.drop_duplicates(subset=['Uploaded_variation'])
+        
+        print("After deduplication:", df['Uploaded_variation'].nunique())
+
         # Process SpliceAI scores
         df = process_spliceai(df)
         
