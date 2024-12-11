@@ -60,48 +60,123 @@ def process_spliceai(df):
     
     return pd.concat([df, splice['SpliceAI_DS']], axis=1)
 
-def calculate_summaries(plof_df, damaging_df, gene):
+def calculate_summaries(plof_df, damaging_df, gene, df):
     """Calculate detailed summaries for both variant types."""
     summaries = {
         "pLoF": {},
         "damaging_missense": {}
     }
     
-    # pLoF summaries
-    summaries["pLoF"][gene] = {
-        "clinvar_hcc_inc": len(plof_df[plof_df['clinvar_hcc_inc'] == 1]['Uploaded_variation'].unique()),
-        "LoF_HC": len(plof_df[plof_df['LoF'] == "HC"]),
-        "Lof_HC_MANE": len(plof_df[(plof_df['LoF'] == "HC") & (plof_df['MANE_SELECT'] != '-')]),
-        "Splice_variants": len(plof_df[
-            (plof_df['Consequence'].isin(["splice_donor_variant", "splice_acceptor_variant", "splice_region_variant"])) &
-            (plof_df['SpliceAI_DS'] >= 0.2)
-        ]),
-        "Splice_variants_MANE": len(plof_df[
-            (plof_df['Consequence'].isin(["splice_donor_variant", "splice_acceptor_variant", "splice_region_variant"])) &
-            (plof_df['SpliceAI_DS'] >= 0.2) & 
-            (plof_df['MANE_SELECT'] != '-')
-        ]),
-        "non_excluded": len(plof_df[plof_df['clinvar_hcc_excl'] != 1])
-    }
+    if not plof_df.empty:
+        summaries["pLoF"][gene] = { 
+            "clinvar_hcc_inc": len(plof_df[plof_df['clinvar_hcc_inc'] == 1]['Uploaded_variation'].unique()),
+            "LoF_HC": len(plof_df[plof_df['LoF'] == "HC"]),
+            "Lof_HC_MANE": len(plof_df[(plof_df['LoF'] == "HC") & (plof_df['MANE_SELECT'] != '-')]),
+            "Splice_variants": len(plof_df[
+                (plof_df['Consequence'].isin(["splice_donor_variant", "splice_acceptor_variant", "splice_region_variant"])) &
+                (plof_df['SpliceAI_DS'] >= 0.2)
+            ]),
+            "Splice_variants_MANE": len(plof_df[
+                (plof_df['Consequence'].isin(["splice_donor_variant", "splice_acceptor_variant", "splice_region_variant"])) &
+                (plof_df['SpliceAI_DS'] >= 0.2) & 
+                (plof_df['MANE_SELECT'] != '-')
+            ]),
+            "non_excluded": len(plof_df[plof_df['clinvar_hcc_excl'] != 1])
+        }
+        
+    else:
+        print(f"\nWARNING: pLoF DataFrame is empty for {gene}. Falling back to full DataFrame.")
+        summaries["pLoF"][gene] = {
+            "clinvar_hcc_inc": len(df[df['clinvar_hcc_inc'] == 1]['Uploaded_variation'].unique()),
+            "LoF_HC": len(df[df['LoF'] == "HC"]),
+            "Lof_HC_MANE": len(df[(df['LoF'] == "HC") & (df['MANE_SELECT'] != '-')]),
+            "Splice_variants": len(df[
+                (df['Consequence'].isin(["splice_donor_variant", "splice_acceptor_variant", "splice_region_variant"])) &
+                (df['SpliceAI_DS'] >= 0.2)
+            ]),
+            "Splice_variants_MANE": len(df[
+                (df['Consequence'].isin(["splice_donor_variant", "splice_acceptor_variant", "splice_region_variant"])) &
+                (df['SpliceAI_DS'] >= 0.2) & 
+                (df['MANE_SELECT'] != '-')
+            ]),
+            "non_excluded": len(df[df['clinvar_hcc_excl'] != 1])
+        }
+
+    # Calculate damaging missense summaries
+    if not damaging_df.empty:
+        summaries["damaging_missense"][gene] = {
+            "Not_plof": len(damaging_df),
+            "Consequence_missense_start_stop_indel_splicing": len(damaging_df[
+                damaging_df['Consequence'].isin([
+                    "missense_variant", "start_lost", "stop_lost",
+                    "inframe_insertion", "inframe_deletion",
+                    "splice_region_variant", "splice_donor_variant", "splice_acceptor_variant"
+                ])
+            ]),
+            "Revel_score": len(damaging_df[damaging_df['REVEL_score'] >= 0.773]),
+            "CADD_PHRED_merge": len(damaging_df[damaging_df['CADD_PHRED_merge'] >= 28.1]),
+            "Splice_variants": len(damaging_df[damaging_df['SpliceAI_DS'] >= 0.2]),
+            "Splice_variants_MANE": len(damaging_df[
+                (damaging_df['SpliceAI_DS'] >= 0.2) & (damaging_df['MANE_SELECT'] != '-')
+            ]),
+            "LoF_LC": len(damaging_df[damaging_df['LoF'] == "LC"])
+        }
+
+    else:
+        print(f"\nWARNING: Damaging Missense DataFrame is empty for {gene}. Falling back to full DataFrame.")
+        summaries["damaging_missense"][gene] = {
+            "Not_plof": len(df[~df['Uploaded_variation'].isin(plof_df['Uploaded_variation'])]),
+            "Consequence_missense_start_stop_indel_splicing": len(df[
+                ~df['Uploaded_variation'].isin(plof_df['Uploaded_variation']) &
+                df['Consequence'].isin([
+                    "missense_variant", "start_lost", "stop_lost",
+                    "inframe_insertion", "inframe_deletion",
+                    "splice_region_variant", "splice_donor_variant", "splice_acceptor_variant"
+                ])
+            ]),
+            "Revel_score": len(df[df['REVEL_score'] >= 0.773]),
+            "CADD_PHRED_merge": len(df[df['CADD_PHRED_merge'] >= 28.1]),
+            "Splice_variants": len(df[df['SpliceAI_DS'] >= 0.2]),
+            "Splice_variants_MANE": len(df[
+                (df['SpliceAI_DS'] >= 0.2) & (df['MANE_SELECT'] != '-')
+            ]),
+            "LoF_LC": len(df[df['LoF'] == "LC"])
+        }
+    # # pLoF summaries
+    # summaries["pLoF"][gene] = {
+    #     "clinvar_hcc_inc": len(plof_df[plof_df['clinvar_hcc_inc'] == 1]['Uploaded_variation'].unique()),
+    #     "LoF_HC": len(plof_df[plof_df['LoF'] == "HC"]),
+    #     "Lof_HC_MANE": len(plof_df[(plof_df['LoF'] == "HC") & (plof_df['MANE_SELECT'] != '-')]),
+    #     "Splice_variants": len(plof_df[
+    #         (plof_df['Consequence'].isin(["splice_donor_variant", "splice_acceptor_variant", "splice_region_variant"])) &
+    #         (plof_df['SpliceAI_DS'] >= 0.2)
+    #     ]),
+    #     "Splice_variants_MANE": len(plof_df[
+    #         (plof_df['Consequence'].isin(["splice_donor_variant", "splice_acceptor_variant", "splice_region_variant"])) &
+    #         (plof_df['SpliceAI_DS'] >= 0.2) & 
+    #         (plof_df['MANE_SELECT'] != '-')
+    #     ]),
+    #     "non_excluded": len(plof_df[plof_df['clinvar_hcc_excl'] != 1])
+    # }
     
     # Damaging missense summaries
-    summaries["damaging_missense"][gene] = {
-        "Not_plof": len(damaging_df),
-        "Consequence_missense_start_stop_indel_splicing": len(damaging_df[
-            damaging_df['Consequence'].isin([
-                "missense_variant", "start_lost", "stop_lost",
-                "inframe_insertion", "inframe_deletion",
-                "splice_region_variant", "splice_donor_variant", "splice_acceptor_variant"
-            ])
-        ]),
-        "Revel_score": len(damaging_df[damaging_df['REVEL_score'] >= 0.773]),
-        "CADD_PHRED_merge": len(damaging_df[damaging_df['CADD_PHRED_merge'] >= 28.1]),
-        "Splice_variants": len(damaging_df[damaging_df['SpliceAI_DS'] >= 0.2]),
-        "Splice_variants_MANE": len(damaging_df[
-            (damaging_df['SpliceAI_DS'] >= 0.2) & (damaging_df['MANE_SELECT'] != '-')
-        ]),
-        "LoF_LC": len(damaging_df[damaging_df['LoF'] == "LC"])
-    }
+    # summaries["damaging_missense"][gene] = {
+    #     "Not_plof": len(damaging_df),
+    #     "Consequence_missense_start_stop_indel_splicing": len(damaging_df[
+    #         damaging_df['Consequence'].isin([
+    #             "missense_variant", "start_lost", "stop_lost",
+    #             "inframe_insertion", "inframe_deletion",
+    #             "splice_region_variant", "splice_donor_variant", "splice_acceptor_variant"
+    #         ])
+    #     ]),
+    #     "Revel_score": len(damaging_df[damaging_df['REVEL_score'] >= 0.773]),
+    #     "CADD_PHRED_merge": len(damaging_df[damaging_df['CADD_PHRED_merge'] >= 28.1]),
+    #     "Splice_variants": len(damaging_df[damaging_df['SpliceAI_DS'] >= 0.2]),
+    #     "Splice_variants_MANE": len(damaging_df[
+    #         (damaging_df['SpliceAI_DS'] >= 0.2) & (damaging_df['MANE_SELECT'] != '-')
+    #     ]),
+    #     "LoF_LC": len(damaging_df[damaging_df['LoF'] == "LC"])
+    # }
     
     return summaries
 
@@ -190,7 +265,7 @@ def process_file(input_file, gene, chromosome, output_dir):
         damaging_df['anno'] = 'damaging_missense'
         
         # Calculate detailed summaries
-        summaries = calculate_summaries(plof_df, damaging_df, gene)
+        summaries = calculate_summaries(plof_df, damaging_df, gene, df)
         
         # Convert summaries to DataFrame format
         summary_df = format_summary_as_dataframe(summaries, gene)
