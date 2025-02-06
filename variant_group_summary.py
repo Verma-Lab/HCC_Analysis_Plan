@@ -1,6 +1,6 @@
 
 #Run Command
-# python variant_group_summary.py --input filename --gene gene --chr CHR --output_dir outdir
+# python variant_group_summary.py --input_file filename --gene gene --chr CHR --output_dir outdir
 
 import pandas as pd
 import os
@@ -9,7 +9,7 @@ import argparse
 def parse_arguments():
     """Set up command line argument parsing."""
     parser = argparse.ArgumentParser(description='Process variant file and create group file.')
-    
+    ca
     parser.add_argument(
         '--input_file',
         type=str,
@@ -72,7 +72,7 @@ def calculate_summaries(plof_df, damaging_df, gene, df):
             "clinvar_hcc_inc": len(plof_df[plof_df['clinvar_hcc_inc'] == 1]['Uploaded_variation'].unique()),
             "LoF_HC": len(plof_df[plof_df['LoF'] == "HC"]),
             "Lof_HC_MANE": len(plof_df[(plof_df['LoF'] == "HC") & (plof_df['MANE_SELECT'] != '-')]),
-            "VEP High Impact": len((plof_df['Consequence'].isn(["transcript_ablation","stop_gained","frameshift_variant","stop_lost","start_lost","transcript_amplification", "feature_elongation", "feature_truncation" ])) & (plof_df['MANE_SELECT'] != '-')),
+            "VEP High Impact": len((plof_df['Consequence'].isin(["transcript_ablation","stop_gained","frameshift_variant","stop_lost","start_lost","transcript_amplification", "feature_elongation", "feature_truncation"])) & (plof_df['MANE_SELECT'] != '-')),
             "Splice_variants": len(plof_df[
                 (plof_df['Consequence'].isin(["splice_donor_variant", "splice_acceptor_variant", "splice_region_variant"])) &
                 (plof_df['SpliceAI_DS'] >= 0.2)
@@ -82,7 +82,8 @@ def calculate_summaries(plof_df, damaging_df, gene, df):
                 (plof_df['SpliceAI_DS'] >= 0.2) & 
                 (plof_df['MANE_SELECT'] != '-')
             ]),
-            "non_excluded": len(plof_df[plof_df['clinvar_hcc_excl'] != 1])
+            "non_excluded": len(plof_df[plof_df['clinvar_hcc_excl'] != 1]),
+            "gnomad combined population AF <= 0.01": len(plof_df[plof_df['gnomADe_AF'] <= 0.01])
         }
         
     else:
@@ -91,7 +92,7 @@ def calculate_summaries(plof_df, damaging_df, gene, df):
             "clinvar_hcc_inc": len(df[df['clinvar_hcc_inc'] == 1]['Uploaded_variation'].unique()),
             "LoF_HC": len(df[df['LoF'] == "HC"]),
             "Lof_HC_MANE": len(df[(df['LoF'] == "HC") & (df['MANE_SELECT'] != '-')]),
-            "VEP High Impact": len((plof_df['Consequence'].isn(["transcript_ablation","stop_gained","frameshift_variant","stop_lost","start_lost","transcript_amplification", "feature_elongation", "feature_truncation" ])) & (df['MANE_SELECT'] != '-')),
+            "VEP High Impact": len((df['Consequence'].isin(["transcript_ablation","stop_gained","frameshift_variant","stop_lost","start_lost","transcript_amplification", "feature_elongation", "feature_truncation"])) & (df['MANE_SELECT'] != '-')),
             "Splice_variants": len(df[
                 (df['Consequence'].isin(["splice_donor_variant", "splice_acceptor_variant", "splice_region_variant"])) &
                 (df['SpliceAI_DS'] >= 0.2)
@@ -101,7 +102,8 @@ def calculate_summaries(plof_df, damaging_df, gene, df):
                 (df['SpliceAI_DS'] >= 0.2) & 
                 (df['MANE_SELECT'] != '-')
             ]),
-            "non_excluded": len(df[df['clinvar_hcc_excl'] != 1])
+            "non_excluded": len(df[df['clinvar_hcc_excl'] != 1]),
+            "gnomad combined population AF <= 0.01": len(df[df['gnomADe_AF'] <= 0.01])
         }
 
     # Calculate damaging missense summaries
@@ -121,7 +123,8 @@ def calculate_summaries(plof_df, damaging_df, gene, df):
             "Splice_variants_MANE": len(damaging_df[
                 (damaging_df['SpliceAI_DS'] >= 0.2) & (damaging_df['MANE_SELECT'] != '-')
             ]),
-            "LoF_LC": len(damaging_df[damaging_df['LoF'] == "LC"])
+            "LoF_LC": len(damaging_df[damaging_df['LoF'] == "LC"]), 
+            "gnomad combined population AF <= 0.01": len(damaging_df[damaging_df['gnomADe_AF'] <= 0.01])
         }
 
     else:
@@ -142,7 +145,8 @@ def calculate_summaries(plof_df, damaging_df, gene, df):
             "Splice_variants_MANE": len(df[
                 (df['SpliceAI_DS'] >= 0.2) & (df['MANE_SELECT'] != '-')
             ]),
-            "LoF_LC": len(df[df['LoF'] == "LC"])
+            "LoF_LC": len(df[df['LoF'] == "LC"]),
+            "gnomad combined population AF <= 0.01": len(df[df['gnomADe_AF'] <= 0.01])
         }
 
     return summaries
@@ -205,11 +209,10 @@ def process_file(input_file, gene, chromosome, output_dir):
              ((df['Consequence'].isin(["splice_donor_variant", "splice_acceptor_variant", "splice_region_variant"])) &
               (df['SpliceAI_DS'] >= 0.2))) &
             (df['MANE_SELECT'] != '-') &
-            ~(df['clinvar_hcc_excl'] == 1)
+            ~(df['clinvar_hcc_excl'] == 1) 
+            & (df['gnomADe_AF'] <= 0.01)
         )
 
-
-        
         plof_df = df[plof_mask].copy()
         plof_df['anno'] = 'pLoF'
         
@@ -224,7 +227,8 @@ def process_file(input_file, gene, chromosome, output_dir):
             ((df['REVEL_score'] >= 0.773) |
              (df['CADD_PHRED_merge'] >= 28.1) |
              ((df['SpliceAI_DS'] >= 0.2) & (df['MANE_SELECT'] != '-')) |
-             (df['LoF'] == "LC"))
+             (df['LoF'] == "LC")) &
+             (df['gnomADe_AF'] <= 0.01)
         )
         
         damaging_df = df[damaging_mask].copy()
