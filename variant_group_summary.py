@@ -72,6 +72,7 @@ def calculate_summaries(plof_df, damaging_df, gene, df):
             "clinvar_hcc_inc": len(plof_df[plof_df['clinvar_hcc_inc'] == 1]['Uploaded_variation'].unique()),
             "LoF_HC": len(plof_df[plof_df['LoF'] == "HC"]),
             "Lof_HC_MANE": len(plof_df[(plof_df['LoF'] == "HC") & (plof_df['MANE_SELECT'] != '-')]),
+            "VEP High Impact": len((plof_df['Consequence'].isn(["transcript_ablation","stop_gained","frameshift_variant","stop_lost","start_lost","transcript_amplification", "feature_elongation", "feature_truncation" ])) & (plof_df['MANE_SELECT'] != '-')),
             "Splice_variants": len(plof_df[
                 (plof_df['Consequence'].isin(["splice_donor_variant", "splice_acceptor_variant", "splice_region_variant"])) &
                 (plof_df['SpliceAI_DS'] >= 0.2)
@@ -90,6 +91,7 @@ def calculate_summaries(plof_df, damaging_df, gene, df):
             "clinvar_hcc_inc": len(df[df['clinvar_hcc_inc'] == 1]['Uploaded_variation'].unique()),
             "LoF_HC": len(df[df['LoF'] == "HC"]),
             "Lof_HC_MANE": len(df[(df['LoF'] == "HC") & (df['MANE_SELECT'] != '-')]),
+            "VEP High Impact": len((plof_df['Consequence'].isn(["transcript_ablation","stop_gained","frameshift_variant","stop_lost","start_lost","transcript_amplification", "feature_elongation", "feature_truncation" ])) & (df['MANE_SELECT'] != '-')),
             "Splice_variants": len(df[
                 (df['Consequence'].isin(["splice_donor_variant", "splice_acceptor_variant", "splice_region_variant"])) &
                 (df['SpliceAI_DS'] >= 0.2)
@@ -142,42 +144,7 @@ def calculate_summaries(plof_df, damaging_df, gene, df):
             ]),
             "LoF_LC": len(df[df['LoF'] == "LC"])
         }
-    # # pLoF summaries
-    # summaries["pLoF"][gene] = {
-    #     "clinvar_hcc_inc": len(plof_df[plof_df['clinvar_hcc_inc'] == 1]['Uploaded_variation'].unique()),
-    #     "LoF_HC": len(plof_df[plof_df['LoF'] == "HC"]),
-    #     "Lof_HC_MANE": len(plof_df[(plof_df['LoF'] == "HC") & (plof_df['MANE_SELECT'] != '-')]),
-    #     "Splice_variants": len(plof_df[
-    #         (plof_df['Consequence'].isin(["splice_donor_variant", "splice_acceptor_variant", "splice_region_variant"])) &
-    #         (plof_df['SpliceAI_DS'] >= 0.2)
-    #     ]),
-    #     "Splice_variants_MANE": len(plof_df[
-    #         (plof_df['Consequence'].isin(["splice_donor_variant", "splice_acceptor_variant", "splice_region_variant"])) &
-    #         (plof_df['SpliceAI_DS'] >= 0.2) & 
-    #         (plof_df['MANE_SELECT'] != '-')
-    #     ]),
-    #     "non_excluded": len(plof_df[plof_df['clinvar_hcc_excl'] != 1])
-    # }
-    
-    # Damaging missense summaries
-    # summaries["damaging_missense"][gene] = {
-    #     "Not_plof": len(damaging_df),
-    #     "Consequence_missense_start_stop_indel_splicing": len(damaging_df[
-    #         damaging_df['Consequence'].isin([
-    #             "missense_variant", "start_lost", "stop_lost",
-    #             "inframe_insertion", "inframe_deletion",
-    #             "splice_region_variant", "splice_donor_variant", "splice_acceptor_variant"
-    #         ])
-    #     ]),
-    #     "Revel_score": len(damaging_df[damaging_df['REVEL_score'] >= 0.773]),
-    #     "CADD_PHRED_merge": len(damaging_df[damaging_df['CADD_PHRED_merge'] >= 28.1]),
-    #     "Splice_variants": len(damaging_df[damaging_df['SpliceAI_DS'] >= 0.2]),
-    #     "Splice_variants_MANE": len(damaging_df[
-    #         (damaging_df['SpliceAI_DS'] >= 0.2) & (damaging_df['MANE_SELECT'] != '-')
-    #     ]),
-    #     "LoF_LC": len(damaging_df[damaging_df['LoF'] == "LC"])
-    # }
-    
+
     return summaries
 
 def format_summary_as_dataframe(summaries, gene):
@@ -217,11 +184,7 @@ def process_file(input_file, gene, chromosome, output_dir):
         df = pd.read_csv(input_file, sep='\t')
         
         #Remove duplicates in Uploaded_variation column
-        print("Before deduplication:", df['Uploaded_variation'].nunique())
-
         df = df.drop_duplicates(subset=['Uploaded_variation'])
-        
-        print("After deduplication:", df['Uploaded_variation'].nunique())
 
         # Process SpliceAI scores
         df = process_spliceai(df)
@@ -234,15 +197,18 @@ def process_file(input_file, gene, chromosome, output_dir):
         clinvar_variants = df[df['clinvar_hcc_inc'] == 1]['Uploaded_variation'].unique()
         clinvar_mask = df['Uploaded_variation'].isin(clinvar_variants)
         
-        # Identify pLoF variants
+        # Identify pLoF variants 
         plof_mask = (
-            (clinvar_mask |
+            (clinvar_mask | 
              ((df['LoF'] == "HC") & (df['MANE_SELECT'] != '-')) |
+             ((df['Consequence'].isn(["transcript_ablation","stop_gained","frameshift_variant","stop_lost","start_lost","transcript_amplification", "feature_elongation", "feature_truncation" ])) & (df['MANE_SELECT'] != '-')) |
              ((df['Consequence'].isin(["splice_donor_variant", "splice_acceptor_variant", "splice_region_variant"])) &
               (df['SpliceAI_DS'] >= 0.2))) &
             (df['MANE_SELECT'] != '-') &
             ~(df['clinvar_hcc_excl'] == 1)
         )
+
+
         
         plof_df = df[plof_mask].copy()
         plof_df['anno'] = 'pLoF'
