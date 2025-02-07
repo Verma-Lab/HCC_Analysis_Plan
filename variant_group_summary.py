@@ -9,7 +9,7 @@ import argparse
 def parse_arguments():
     """Set up command line argument parsing."""
     parser = argparse.ArgumentParser(description='Process variant file and create group file.')
-    ca
+
     parser.add_argument(
         '--input_file',
         type=str,
