@@ -205,7 +205,7 @@ def process_file(input_file, gene, chromosome, output_dir):
         plof_mask = (
             (clinvar_mask | 
              ((df['LoF'] == "HC") & (df['MANE_SELECT'] != '-')) |
-             ((df['Consequence'].isn(["transcript_ablation","stop_gained","frameshift_variant","stop_lost","start_lost","transcript_amplification", "feature_elongation", "feature_truncation" ])) & (df['MANE_SELECT'] != '-')) |
+             ((df['Consequence'].isin(["transcript_ablation","stop_gained","frameshift_variant","stop_lost","start_lost","transcript_amplification", "feature_elongation", "feature_truncation" ])) & (df['MANE_SELECT'] != '-')) |
              ((df['Consequence'].isin(["splice_donor_variant", "splice_acceptor_variant", "splice_region_variant"])) &
               (df['SpliceAI_DS'] >= 0.2))) &
             (df['MANE_SELECT'] != '-') &
