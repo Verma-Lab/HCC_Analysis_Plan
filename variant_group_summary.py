@@ -196,6 +196,7 @@ def process_file(input_file, gene, chromosome, output_dir):
         # Convert numeric columns
         df['CADD_PHRED_merge'] = pd.to_numeric(df['CADD_PHRED_merge'], errors='coerce')
         df['REVEL_score'] = pd.to_numeric(df['REVEL_score'], errors='coerce')
+        df['gnomADe_AF'] = pd.to_numeric(df['gnomADe_AF'], errors='coerce')
         
         # Get unique ClinVar variants
         clinvar_variants = df[df['clinvar_hcc_inc'] == 1]['Uploaded_variation'].unique()
@@ -234,31 +235,42 @@ def process_file(input_file, gene, chromosome, output_dir):
         damaging_df = df[damaging_mask].copy()
         damaging_df['anno'] = 'damaging_missense'
         
-        # Calculate detailed summaries
-        summaries = calculate_summaries(plof_df, damaging_df, gene, df)
-        
-        # Convert summaries to DataFrame format
-        summary_df = format_summary_as_dataframe(summaries, gene)
-        
-        # Save summary DataFrame
-        summary_file_path = os.path.join(output_dir, f"summary_results_{gene}.txt")
-        summary_df.to_csv(summary_file_path, sep='\t', index=False)
-        print(f"\nSaved summary to: {summary_file_path}")
-        
-        # Create group file
+
+        # Create group file path
         group_file_path = os.path.join(output_dir, f"cancer_genes.{chromosome}.txt")
-        
+
         # Combine variants
         combined_df = pd.concat([plof_df, damaging_df], ignore_index=True)
-        
+
         with open(group_file_path, 'w') as f:
             gene_upper = gene.upper()
             var_line = f"{gene_upper} var {' '.join(combined_df['Uploaded_variation'].astype(str))}"
             anno_line = f"{gene_upper} anno {' '.join(combined_df['anno'].astype(str))}"
             f.write(f"{var_line}\n{anno_line}\n")
-        
         print(f"Created group file: {group_file_path}")
+
+        # Calculate initial summaries
+        summaries = calculate_summaries(plof_df, damaging_df, gene, df)
+        summary_df = format_summary_as_dataframe(summaries, gene)
         
+        #Count totals from group file 
+        with open(group_file_path, 'r') as f:
+            anno_line = [line for line in f.readlines() if 'anno' in line][0]
+            plof_total = anno_line.count("pLoF")
+            damaging_total = anno_line.count("damaging_missense")
+
+        # Add total rows to summary DataFrame
+        total_rows = pd.DataFrame([
+            {'gene': gene, 'category': 'pLoF', 'metric': 'Total', 'value': plof_total},
+            {'gene': gene, 'category': 'damaging_missense', 'metric': 'Total', 'value': damaging_total}
+        ])
+
+        summary_df = pd.concat([summary_df, total_rows], ignore_index=True)
+
+        # Save summary DataFrame
+        summary_file_path = os.path.join(output_dir, f"summary_results_{gene}.txt")
+        summary_df.to_csv(summary_file_path, sep='\t', index=False)
+        print(f"\nSaved summary to: {summary_file_path}")
         
         # Print summary to console
         print("\nSummary Results:")
