@@ -1,4 +1,3 @@
-
 #Run Command
 # python variant_group_summary.py --input_file filename --gene gene --chr CHR --output_dir outdir
 
