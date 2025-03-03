@@ -83,7 +83,8 @@ def calculate_summaries(plof_df, damaging_df, gene, df):
                 (plof_df['MANE_SELECT'] != '-')
             ]),
             "non_excluded": len(plof_df[plof_df['clinvar_hcc_excl'] != 1]),
-            "gnomad combined population AF <= 0.01": len(plof_df[plof_df['gnomADe_AF'] <= 0.01])
+            "gnomad combined population AF <= 0.01": len(plof_df[plof_df['gnomADe_AF'] <= 0.01]),
+            "gnomad combined population AF == '-'": len(plof_df[plof_df['gnomADe_AF'] == '-'])
         }
         
     else:
@@ -103,7 +104,8 @@ def calculate_summaries(plof_df, damaging_df, gene, df):
                 (df['MANE_SELECT'] != '-')
             ]),
             "non_excluded": len(df[df['clinvar_hcc_excl'] != 1]),
-            "gnomad combined population AF <= 0.01": len(df[df['gnomADe_AF'] <= 0.01])
+            "gnomad combined population AF <= 0.01": len(df[df['gnomADe_AF'] <= 0.01]),
+            "gnomad combined population AF == '-'": len(df[df['gnomADe_AF'] == '-'])
         }
 
     # Calculate damaging missense summaries
@@ -122,7 +124,8 @@ def calculate_summaries(plof_df, damaging_df, gene, df):
             "CADD_PHRED_merge": len(damaging_df[damaging_df['CADD_PHRED_merge'] >= 28.1]),
             "Splice_variants": len(damaging_df[damaging_df['SpliceAI_DS'] >= 0.2]),
             "LoF_LC": len(damaging_df[damaging_df['LoF'] == "LC"]), 
-            "gnomad combined population AF <= 0.01": len(damaging_df[damaging_df['gnomADe_AF'] <= 0.01])
+            "gnomad combined population AF <= 0.01": len(damaging_df[damaging_df['gnomADe_AF'] <= 0.01]),
+            "gnomad combined population AF == '-'": len(damaging_df[damaging_df['gnomADe_AF'] == '-'])
         }
 
     else:
@@ -145,7 +148,8 @@ def calculate_summaries(plof_df, damaging_df, gene, df):
                 (df['SpliceAI_DS'] >= 0.2) & (df['MANE_SELECT'] != '-')
             ]),
             "LoF_LC": len(df[df['LoF'] == "LC"]),
-            "gnomad combined population AF <= 0.01": len(df[df['gnomADe_AF'] <= 0.01])
+            "gnomad combined population AF <= 0.01": len(df[df['gnomADe_AF'] <= 0.01]), 
+            "gnomad combined population AF == '-'": len(df[df['gnomADe_AF'] == '-'])
         }
 
     return summaries
@@ -216,8 +220,8 @@ def process_file(input_file, gene, chromosome, output_dir):
                 ])) & (df['SpliceAI_DS'] >= 0.2))
             ) &
             (df['MANE_SELECT'] != '-') &  # Global MANE transcript requirement
-            ~(df['clinvar_hcc_excl'] == 1) &  # Exclusion criteria
-            (df['gnomADe_AF'] <= 0.01)  # MAF threshold
+            ~(df['clinvar_hcc_excl'] == 1) &
+            ((df['gnomADe_AF'] <= 0.01) | (df['gnomADe_AF'] == '-'))
         )
 
         plof_df = df[plof_mask].copy()
@@ -238,7 +242,7 @@ def process_file(input_file, gene, chromosome, output_dir):
                 (df['LoF'] == "LC")
             ) &
             (df['MANE_SELECT'] != '-') & # Global MANE transcript requirement
-            (df['gnomADe_AF'] <= 0.01) # MAF threshold
+            ((df['gnomADe_AF'] <= 0.01) |  (df['gnomADe_AF'] == '-')) # MAF threshold
         )
 
         damaging_df = df[damaging_mask].copy()
