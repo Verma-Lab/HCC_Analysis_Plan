@@ -199,7 +199,12 @@ def process_file(input_file, gene, chromosome, output_dir):
         # Convert numeric columns
         df['CADD_PHRED_merge'] = pd.to_numeric(df['CADD_PHRED_merge'], errors='coerce')
         df['REVEL_score'] = pd.to_numeric(df['REVEL_score'], errors='coerce')
-        df['gnomADe_AF'] = pd.to_numeric(df['gnomADe_AF'], errors='coerce')
+        
+        #Only convert gnomADe_AF where it is not '-'
+        mask = df['gnomADe_AF'] != '-'
+
+        #Apply numeric conversion only to rows where mask is not '-' 
+        df.loc[mask, 'gnomADe_AF'] = pd.to_numeric(df.loc[mask, 'gnomADe_AF'], errors='coerce')
         
         # Get unique ClinVar variants
         clinvar_variants = df[df['clinvar_hcc_inc'] == 1]['Uploaded_variation'].unique()
