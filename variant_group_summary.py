@@ -121,7 +121,7 @@ def calculate_summaries(plof_df, damaging_df, gene, df):
                 ])
             ]),
             "Revel_score": len(damaging_df[damaging_df['REVEL_score'] >= 0.773]),
-            "CADD_PHRED_merge": len(damaging_df[damaging_df['CADD_PHRED_merge'] >= 28.1]),
+            "CADD_PHRED": len(damaging_df[damaging_df['CADD_PHRED'] >= 28.1]),
             "Splice_variants": len(damaging_df[damaging_df['SpliceAI_DS'] >= 0.2]),
             "LoF_LC": len(damaging_df[damaging_df['LoF'] == "LC"]), 
             "gnomad combined population AF <= 0.01": len(damaging_df[damaging_df['gnomADe_AF'] <= 0.01]),
@@ -142,7 +142,7 @@ def calculate_summaries(plof_df, damaging_df, gene, df):
                 ])
             ]),
             "Revel_score": len(df[df['REVEL_score'] >= 0.773]),
-            "CADD_PHRED_merge": len(df[df['CADD_PHRED_merge'] >= 28.1]),
+            "CADD_PHRED": len(df[df['CADD_PHRED'] >= 28.1]),
             "Splice_variants": len(df[df['SpliceAI_DS'] >= 0.2]),
             "Splice_variants_MANE": len(df[
                 (df['SpliceAI_DS'] >= 0.2) & (df['MANE_SELECT'] != '-')
@@ -197,7 +197,7 @@ def process_file(input_file, gene, chromosome, output_dir):
         df = process_spliceai(df)
         
         # Convert numeric columns
-        df['CADD_PHRED_merge'] = pd.to_numeric(df['CADD_PHRED_merge'], errors='coerce')
+        df['CADD_PHRED'] = pd.to_numeric(df['CADD_PHRED'], errors='coerce')
         df['REVEL_score'] = pd.to_numeric(df['REVEL_score'], errors='coerce')
         
         # Create a separate flag for missing gnomADe_AF values
@@ -242,7 +242,7 @@ def process_file(input_file, gene, chromosome, output_dir):
             ])) &
             (
                 (df['REVEL_score'] >= 0.773) |
-                (df['CADD_PHRED_merge'] >= 28.1) |
+                (df['CADD_PHRED'] >= 28.1) |
                 (df['SpliceAI_DS'] >= 0.2) |
                 (df['LoF'] == "LC")
             ) &
