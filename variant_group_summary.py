@@ -1,4 +1,3 @@
-
 #Run Command
 # python variant_group_summary.py --input_file filename --gene gene --chr CHR --output_dir outdir
 
@@ -189,9 +188,17 @@ def process_file(input_file, gene, chromosome, output_dir):
         # Read input file
         print(f"Reading file: {input_file}")
         df = pd.read_csv(input_file, sep='\t')
-        
-        #Remove duplicates in Uploaded_variation column
-        df = df.drop_duplicates(subset=['Uploaded_variation'])
+
+        # Immediate check before any processing
+        print(f"\nFile loaded. Original row count: {len(df)}")
+        print("MANE_SELECT value counts before any processing:")
+        print(df['MANE_SELECT'].value_counts().to_string())
+        print("\nCANONICAL value counts before any processing:")
+        print(df['CANONICAL'].value_counts().to_string())
+
+        # Keep only rows with MANE_SELECT information
+        df = df[df['MANE_SELECT'] != '-'].copy()
+        print(f"Rows with MANE_SELECT: {len(df)}")
 
         # Process SpliceAI scores
         df = process_spliceai(df)
@@ -210,6 +217,13 @@ def process_file(input_file, gene, chromosome, output_dir):
         clinvar_variants = df[df['clinvar_hcc_inc'] == 1]['Uploaded_variation'].unique()
         clinvar_mask = df['Uploaded_variation'].isin(clinvar_variants)
         
+        # Now remove duplicates based on the specified columns
+        dup_drop_cols = ['Uploaded_variation', 'MANE_SELECT', 'Consequence', 'LoF', 'gnomADe_AF', 'clinvar_hcc_inc', 'CADD_PHRED', 'clinvar_hcc_excl', 'SpliceAI_DS', 'REVEL_score']
+
+        df = df.drop_duplicates(subset=dup_drop_cols)
+
+        print(f"After duplicate removal: {len(df)} rows")
+
         # Identify pLoF variants 
         plof_mask = (
             (
@@ -253,6 +267,35 @@ def process_file(input_file, gene, chromosome, output_dir):
         damaging_df = df[damaging_mask].copy()
         damaging_df['anno'] = 'damaging_missense'
         
+        # For pLoF variants check for any remaining duplicates at the variant-gene level
+        plof_count_before = len(plof_df)
+        plof_df = plof_df.set_index(['Uploaded_variation', 'SYMBOL'])
+        check_dup_plof = plof_df[plof_df.index.duplicated(keep=False)]
+
+        if len(check_dup_plof) > 0:
+            print(f"Found {len(check_dup_plof)} duplicate pLoF variant-gene pairs")
+            #Keep the first occurence of each duplicate 
+            plof_df = plof_df[~plof_df.index.duplicated(keep='first')]
+
+        plof_df = plof_df.reset_index()
+        plof_count_after = len(plof_df)
+        print(f"Removed {plof_count_before - plof_count_after} duplicate pLoF rows")
+
+
+        #For damaging missense variants check for any remaining duplicates at the variant-gene level
+        damaging_count_before = len(damaging_df)
+        damaging_df = damaging_df.set_index(['Uploaded_variation', 'SYMBOL'])
+        check_dup_damaging = damaging_df[damaging_df.index.duplicated(keep=False)]
+
+        if len(check_dup_damaging) > 0:
+            print(f"Found {len(check_dup_damaging)} duplicate damaging missense variant-gene pairs")
+            # Keep first occurrence of each duplicate
+            damaging_df = damaging_df[~damaging_df.index.duplicated(keep='first')]
+
+        damaging_df = damaging_df.reset_index()
+        damaging_count_after = len(damaging_df)
+        print(f"Removed {damaging_count_before - damaging_count_after} duplicate damaging missense rows")
+
         # Create group file path
         group_file_path = os.path.join(output_dir, f"cancer_genes.{chromosome}.txt")
 
