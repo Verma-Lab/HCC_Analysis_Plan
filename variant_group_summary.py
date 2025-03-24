@@ -63,7 +63,8 @@ def calculate_summaries(plof_df, damaging_df, gene, df):
     """Calculate detailed summaries for both variant types."""
     summaries = {
         "pLoF": {},
-        "damaging_missense": {}
+        "damaging_missense": {},
+        "pLoF+damaging_missense": {}
     }
     
     if not plof_df.empty:
@@ -150,6 +151,17 @@ def calculate_summaries(plof_df, damaging_df, gene, df):
             "gnomad combined population AF <= 0.01": len(df[df['gnomADe_AF'] <= 0.01]), 
             "gnomad combined population AF == '-'": len(df[df['gnomADe_AF_missing']])
         }
+    
+    if not plof_df.empty or not damaging_df.empty:
+        # Concatenate and find unique variants
+        all_variants = pd.concat([
+            plof_df['Uploaded_variation'] if not plof_df.empty else pd.Series(),
+            damaging_df['Uploaded_variation'] if not damaging_df.empty else pd.Series()
+        ]).unique()
+
+        summaries["pLoF+damaging_missense"][gene] = {
+            "Total": len(all_variants)
+        }
 
     return summaries
 
@@ -177,6 +189,17 @@ def format_summary_as_dataframe(summaries, gene):
             'value': value
         })
     
+    # Process combined pLoF+damaging_missense summary
+    if "pLoF+damaging_missense" in summaries and gene in summaries["pLoF+damaging_missense"]:
+        combined_stats = summaries["pLoF+damaging_missense"][gene]
+        for metric, value in combined_stats.items():
+            rows.append({
+                'gene': gene,
+                'category': 'pLoF+damaging_missense',
+                'metric': metric,
+                'value': value
+            })
+
     # Create DataFrame and sort by category and metric
     df = pd.DataFrame(rows)
     df = df.sort_values(['category', 'metric'])
