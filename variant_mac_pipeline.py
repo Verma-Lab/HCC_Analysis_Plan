@@ -3,11 +3,12 @@
 """
 Variant Mac Pipeline 
 
-Pipeline to calculate minor allele counts (MAC) for cases and controls from variants in a group file.
+Pipeline to calculate minor allele counts (MAC) for cases and controls from variants in group files, with gnomAD allele frequencies from VEP annotation files and variant annotations derived from group file classifications.
 
 EXAMPLE USAGE:
 python3 variant_mac_pipeline.py \
   --group-files /home/agaro/verma_shared/projects/HCC/PMBB_6Gene_Burden_Analysis_030625/group_files/cancer_genes.*.txt \
+  --vep-files /home/agaro/verma_shared/projects/HCC/PMBB_6Gene_Burden_Analysis_030625/variant_annotations/vep_annot_msh6_chr_2_releasev3.txt /home/agaro/verma_shared/projects/HCC/PMBB_6Gene_Burden_Analysis_030625/variant_annotations/vep_annot_pms2_chr_7_releasev3.txt \
   --phenotype-file /project/verma_shared/projects/HCC/covariates/covariates_hcc_cancer_free_controls_exomepcs_ancestry_column_3.0.csv \
   --bfile /static/PMBB/PMBB-Release-2024-3.0/Exome/pVCF/NF_all_variants/PMBB-Release-2024-3.0_genetic_exome_NF \
   --output-dir /home/agaro/verma_shared/projects/HCC/PMBB_6Gene_Burden_Analysis_030625/ALL_ALL/Variant_Level_Analysis_Test \
@@ -19,6 +20,7 @@ This pipeline:
 2. Creates PLINK keep files for cases (HCC_Cancer_Free=1) and controls (HCC_Cancer_Free=0)
 3. Runs PLINK2 genotype counting for cases and controls
 4. Calculates Minor Allele Counts (MAC) for both groups
+5. Adds gnomAD allele frequency column and variant annotation columns
 5. Creates final summary: MAC_case_control_summary.txt
 
 """
