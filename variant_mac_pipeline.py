@@ -32,6 +32,8 @@ from pathlib import Path
 import subprocess
 import os 
 import glob 
+import re
+from collections import defaultdict
 
 class VariantMACPipeline:
     def __init__(self, args):
@@ -39,26 +41,65 @@ class VariantMACPipeline:
         self.output_dir = Path(args.output_dir)
         self.output_dir.mkdir(parents = True, exist_ok= True)
 
+        #Store the group file to annotation mapping
+        self.group_annotations = {}
+        #Store VEP data for lookup 
+        self.vep_data = {}
+
     def extract_variants_from_file(self, file_path):
-        """Extract variants from a file after the 'var' keyword."""
+        """Extract variants from the group file after the 'var' keyword and map to annotations."""
         try:
             with open(file_path, "r") as file:
-                first_line = file.readline().strip()
-                parts = first_line.split()
+                lines = file.readlines()
+
+                if len(lines) < 2: 
+                    print(f"Warning Expected at least 2 lines in {file_path}")
+                    return [], {}
                 
+                # Parse first line (variants)
+                first_line = lines[0].strip()
+                first_parts = first_line.split() 
+
+                # Parse second line (annotations)
+                second_line = lines[1].strip()
+                second_parts = first_line.split()
+
+                variants = []
+                variant_annotations = {}
+
                 # Find 'var' and extract everything after it
-                if "var" in parts:
-                    var_index = parts.index("var")
-                    return parts[var_index + 1:]
+                if "var" in first_parts:
+                    var_index = first_parts.index("var")
+                    variants = first_parts[var_index + 1:]
+                    
+                    # Find 'anno' and extract everything after it
+                    if "anno" in second_parts:
+                        anno_index = second_parts.index("anno")
+                        annotations = second_parts[anno_index + 1:]
+
+                        # Map variants to their annotations
+                        if len(variants) == len(annotations):
+                           for variant, annotation in zip(variants, annotations):
+                            variant_annotations[variant] = annotation
+                        print(f"  Mapped {len(variants)} variants to annotations in {file_path.name}")
+                    else:
+                        print(f"Warning: Mismatch in {file_path}: {len(variants)} variants vs {len(annotations)} annotations")
+                        return [], {}
                 else:
-                    print(f"Warning: 'var' keyword not found in {file_path}")
-                    return []
+                    print(f"Warning: 'anno' keyword not found in {file_path}")
+                    return [], {}
+            else:
+                print(f"Warning: 'var' keyword not found in {file_path}")
+                return [], {}
+            
+            return variants, variant_annotations
+            
         except FileNotFoundError:
             print(f"Error: File not found - {file_path}")
-            return []
+            return [], {}
         except Exception as e:
             print(f"Error reading {file_path}: {e}")
-            return []
+            return [], {} 
 
     def find_group_files(self):
         """Find group files based on the provided pattern or directory."""
