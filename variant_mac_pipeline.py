@@ -53,7 +53,7 @@ class VariantMACPipeline:
                 lines = file.readlines()
 
                 if len(lines) < 2: 
-                    print(f"Warning Expected at least 2 lines in {file_path}")
+                    print(f"Warning: Expected at least 2 lines in {file_path}")
                     return [], {}
                 
                 # Parse first line (variants)
@@ -101,6 +101,87 @@ class VariantMACPipeline:
             print(f"Error reading {file_path}: {e}")
             return [], {} 
 
+    def load_vep_data(self):
+        """Load a single VEP file and add to lookup dictionary."""
+        vep_path = Path(vep_file)
+        if not vep_path.exists():
+            print(f"Warning: VEP file not found: {vep_file}")
+            return
+            
+        try:
+            # Try different separators
+            separators = ['\t', ',']
+            vep_df = None
+            
+            for sep in separators:
+                try:
+                    vep_df = pd.read_csv(vep_path, sep=sep, low_memory=False)
+                    if len(vep_df.columns) > 5:  # Reasonable number of columns for VEP
+                        break
+                except:
+                    continue
+            
+            if vep_df is None:
+                print(f"Warning: Could not parse VEP file: {vep_file}")
+                return
+            
+            print(f"  Loaded {vep_file}: {len(vep_df)} rows, {len(vep_df.columns)} columns")
+            
+            # Determine which gnomAD column to use based on sequencing type
+            gnomad_column = self.get_gnomad_column()
+            
+            # Check for required columns
+            required_cols = ['Uploaded_variation', gnomad_column]
+            missing_cols = [col for col in required_cols if col not in vep_df.columns]
+            
+            if missing_cols:
+                print(f"  Warning: Missing columns in {vep_file}: {missing_cols}")
+                print(f"  Available columns: {list(vep_df.columns)}")
+                # Try to find alternative gnomAD columns
+                available_gnomad_cols = [col for col in vep_df.columns if 'gnomad' in col.lower()]
+                if available_gnomad_cols:
+                    print(f"  Available gnomAD columns: {available_gnomad_cols}")
+                return
+            
+            # Store VEP data with Uploaded_variation as key
+            for _, row in vep_df.iterrows():
+                variant_id = row['Uploaded_variation']
+                self.vep_data[variant_id] = {
+                    'gnomAD_AF': row[gnomad_column],  # Use generic key name
+                    'source_file': vep_path.name,
+                    'sequencing_type': self.args.sequencing_type
+                }
+            
+            print(f"  Added {len(vep_df)} variant annotations from {vep_path.name}")
+            
+        except Exception as e:
+            print(f"Error loading VEP file {vep_file}: {e}")
+    
+    def load_all_vep_data(self):
+        """Load all VEP files and create lookup dictionary."""
+        if not self.args.vep_files:
+            print("No VEP files provided - skipping VEP annotation")
+            return
+        
+        # Determine which gnomAD column to use based on sequencing type
+        gnomad_column = self.get_gnomad_column()
+        print(f"Loading VEP files for annotation lookup (using {gnomad_column})...")
+        
+        for vep_file in self.args.vep_files:
+            self.load_vep_file(vep_file)
+        
+        print(f"Total VEP annotations loaded: {len(self.vep_data)}")
+    
+    def get_gnomad_column(self):
+        """Determine which gnomAD column to use based on sequencing type."""
+        if self.args.sequencing_type.lower() == 'wes':
+            return 'gnomADe_AF'  # Exome allele frequencies
+        elif self.args.sequencing_type.lower() == 'wgs':
+            return 'gnomADg_AF'  # Genome allele frequencies
+        else:
+            print(f"Warning: Unknown sequencing type '{self.args.sequencing_type}'. Defaulting to WES (gnomADe_AF)")
+            return 'gnomADe_AF'
+
     def find_group_files(self):
         """Find group files based on the provided pattern or directory."""
         group_files = []
@@ -139,7 +220,7 @@ class VariantMACPipeline:
         return validated_files
 
     def combine_group_files(self):
-        """Extract and combine variants from all group files."""
+        """Extract and combine variants from all group files with annotation mapping."""
         print("Step 1: Extracting and combining variants from group files...")
         
         group_files = self.find_group_files()
@@ -152,11 +233,28 @@ class VariantMACPipeline:
         
         for file_path in group_files:
             print(f"  Processing: {file_path.name}")
-            variants = self.extract_variants_from_file(file_path)
-            variants_per_file[file_path.name] = variants
-            all_variants.extend(variants)
-            print(f"    Found {len(variants)} variants")
+            variants, variant_annotations = self.extract_variants_from_file(file_path)
+
+            variants_per_file[file_path.name] = {
+                'variants': variants,
+                'annotations': variant_annotations
+            }
         
+            # Store annotation for each variant (individual variant-level annotations)
+            for variant, annotation in variant_annotations.items():
+                self.group_annotations[variant] = annotation
+            
+            all_variants.extend(variants)
+            
+            # Show annotation distribution for this file
+            if variant_annotations:
+                anno_counts = {}
+                for anno in variant_annotations.values():
+                    anno_counts[anno] = anno_counts.get(anno, 0) + 1
+                print(f"    Found {len(variants)} variants with annotations: {dict(anno_counts)}")
+            else:
+                print(f"    Found {len(variants)} variants (no annotations)")
+
         # Remove duplicates while preserving order
         unique_variants = list(dict.fromkeys(all_variants))
         
@@ -168,6 +266,26 @@ class VariantMACPipeline:
         
         print(f"  Created: {output_file}")
         print(f"  Total unique variants: {len(unique_variants)} (from {len(all_variants)} total)")
+        
+        # Write annotation mapping file for reference
+        annotation_file = self.output_dir / "variant_annotation_mapping.txt"
+        with open(annotation_file, "w") as file:
+            file.write("Variant_ID\tAnnotation\tSource_File\n")
+            for variant, annotation in self.group_annotations.items():
+                # Find which file this variant came from
+                source_file = "unknown"
+                for fname, fdata in variants_per_file.items():
+                    if variant in fdata.get('annotations', {}):
+                        source_file = fname
+                        break
+                file.write(f"{variant}\t{annotation}\t{source_file}\n")
+        print(f"  Created annotation mapping: {annotation_file}")
+        
+        # Show overall annotation distribution
+        overall_anno_counts = {}
+        for anno in self.group_annotations.values():
+            overall_anno_counts[anno] = overall_anno_counts.get(anno, 0) + 1
+        print(f"  Overall annotation distribution: {dict(overall_anno_counts)}")
         
         return output_file
 
@@ -353,7 +471,7 @@ class VariantMACPipeline:
             return None
 
     def process_mac_results(self, cases_gcount_file, controls_gcount_file):
-        """Process MAC results and create final summary."""
+        """Process MAC results and create final summary with annotations and gnomAD column."""
         print("Step 4: Calculating MAC and creating summary...")
         
         # Calculate MAC for cases and controls
@@ -377,8 +495,27 @@ class VariantMACPipeline:
                 on=['#CHROM', 'ID', 'REF', 'ALT']
             )
             
+            #Add gnomAD column
+            gnomad_column_name = f"gnomAD_AF_{self.args.sequencing_type.upper()}"
+            print(f"  Adding VEP annotations ({gnomad_column_name})...")
+            merged_df[gnomad_column_name] = merged_df['ID'].map(
+                lambda x: self.vep_data.get(x, {}).get('gnomAD_AF', 'NA')
+            )
+
+            #Add variant annotations
+            print("  Adding group-based annotations...")
+            merged_df['Annotation'] = merged_df['ID'].map(
+                lambda x: self.group_annotations.get(x, 'unknown')
+            )
+
+            # Reorder columns
+            gnomad_column_name = f"gnomAD_AF_{self.args.sequencing_type.upper()}"
+            column_order = ['#CHROM', 'ID', 'REF', 'ALT', 'Annotation', 'MAC_Case', 'MAC_Control', 
+                          gnomad_column_name]
+            merged_df = merged_df[column_order]
+
             # Save results
-            output_file = self.output_dir / "MAC_case_control_summary.txt"
+            output_file = self.output_dir / "group_file_variants_MAC_case_control_summary.txt"
             merged_df.to_csv(output_file, sep='\t', index=False)
             
             print(f"  Created final summary: {output_file}")
@@ -402,6 +539,9 @@ class VariantMACPipeline:
         print("Starting Variant MAC Pipeline...")
         print("="*50)
         
+        #Load VEP data
+        self.load_all_vep_data()
+
         # Step 1: Combine group files
         variants_file = self.combine_group_files()
         if variants_file is None:
@@ -425,7 +565,7 @@ class VariantMACPipeline:
             print("Pipeline failed at PLINK step")
             return False
         
-        # Step 4: Process MAC results
+        # Step 4: Process MAC results with annotations
         final_output = self.process_mac_results(cases_gcount, controls_gcount)
         
         if final_output is None:
@@ -451,13 +591,24 @@ def check_dependencies():
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Variant MAC Pipeline - Extract variants, process phenotypes, run PLINK, and calculate MAC",
+        description="Variant MAC Pipeline - Extract variants, variant annotations, gnomad column, process phenotypes, run PLINK, and calculate MAC",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Basic usage with specific group files
+  # WES data with VEP files (default)
   python3 variant_mac_pipeline.py \\
     --group-files cancer_genes.*.txt \\
+    --vep-files vep_gene1.txt vep_gene2.txt \\
+    --sequencing-type WES \\
+    --phenotype-file phenotypes.csv \\
+    --bfile /path/to/plink_files \\
+    --output-dir results/
+
+  # WGS data with VEP files
+  python3 variant_mac_pipeline.py \\
+    --group-files cancer_genes.*.txt \\
+    --vep-files vep_gene1.txt vep_gene2.txt \\
+    --sequencing-type WGS \\
     --phenotype-file phenotypes.csv \\
     --bfile /path/to/plink_files \\
     --output-dir results/
@@ -465,26 +616,11 @@ Examples:
   # Using a directory of group files
   python3 variant_mac_pipeline.py \\
     --group-dir /path/to/group/files/ \\
+    --vep-files /path/to/vep/*.txt \\
+    --sequencing-type WES \\
     --phenotype-file phenotypes.csv \\
     --bfile /path/to/plink_files \\
     --output-dir results/
-
-  # Test without running PLINK
-  python3 variant_mac_pipeline.py \\
-    --group-files *.txt \\
-    --phenotype-file phenotypes.csv \\
-    --bfile /path/to/plink_files \\
-    --output-dir results/ \\
-    --skip-plink
-
-  # Custom column names
-  python3 variant_mac_pipeline.py \\
-    --group-files cancer_genes.*.txt \\
-    --phenotype-file phenotypes.csv \\
-    --bfile /path/to/plink_files \\
-    --output-dir results/ \\
-    --case-column disease_status \\
-    --id-column subject_id
         """
     )
     
@@ -500,6 +636,21 @@ Examples:
         help="Directory containing group files (will use all .txt files)"
     )
     
+    # VEP files
+    parser.add_argument(
+        "--vep-files",
+        nargs="*",
+        help="VEP annotation files (optional - supports multiple files)"
+    )
+
+    # Sequencing type for gnomAD column =
+    parser.add_argument(
+        "--sequencing-type",
+        choices=['WES', 'WGS', 'wes', 'wgs'],
+        default='WES',
+        help="Sequencing type to determine gnomAD column (WES=gnomADe_AF, WGS=gnomADg_AF, default: WES)"
+    )
+
     # Required arguments
     parser.add_argument(
         "--phenotype-file", 
@@ -551,6 +702,13 @@ Examples:
         print(f"  Group files: {args.group_files}")
     else:
         print(f"  Group directory: {args.group_dir}")
+
+    if args.vep_files:
+        print(f"  VEP files: {args.vep_files}")
+        print(f"  Sequencing type: {args.sequencing_type} ({'gnomADe_AF' if args.sequencing_type.upper() == 'WES' else 'gnomADg_AF'})")
+    else:
+        print("  VEP files: None (will skip VEP annotations)")
+        
     print(f"  Phenotype file: {args.phenotype_file}")
     print(f"  PLINK bfile: {args.bfile}")
     print(f"  Output directory: {args.output_dir}")
