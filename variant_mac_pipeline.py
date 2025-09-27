@@ -102,13 +102,13 @@ class VariantMACPipeline:
             return [], {} 
 
     def load_vep_file(self, vep_file):  
-    """Load a single VEP file and add to lookup dictionary."""
-    vep_path = Path(vep_file)
-    if not vep_path.exists():
-        print(f"Warning: VEP file not found: {vep_file}")
-        return
+        """Load a single VEP file and add to lookup dictionary."""
+        vep_path = Path(vep_file)
+        if not vep_path.exists():
+            print(f"Warning: VEP file not found: {vep_file}")
+            return
         
-    try:
+        try:
             # Try different separators
             separators = ['\t', ',']
             vep_df = None
