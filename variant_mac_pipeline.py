@@ -79,20 +79,20 @@ class VariantMACPipeline:
 
                         # Map variants to their annotations
                         if len(variants) == len(annotations):
-                           for variant, annotation in zip(variants, annotations):
-                            variant_annotations[variant] = annotation
-                        print(f"  Mapped {len(variants)} variants to annotations in {file_path.name}")
+                            for variant, annotation in zip(variants, annotations):
+                               variant_annotations[variant] = annotation
+                            print(f"  Mapped {len(variants)} variants to annotations in {file_path.name}")
+                        else:
+                            print(f"Warning: Mismatch in {file_path}: {len(variants)} variants vs {len(annotations)} annotations")
+                            return [], {}
                     else:
-                        print(f"Warning: Mismatch in {file_path}: {len(variants)} variants vs {len(annotations)} annotations")
+                        print(f"Warning: 'anno' keyword not found in {file_path}")
                         return [], {}
                 else:
-                    print(f"Warning: 'anno' keyword not found in {file_path}")
+                    print(f"Warning: 'var' keyword not found in {file_path}")
                     return [], {}
-            else:
-                print(f"Warning: 'var' keyword not found in {file_path}")
-                return [], {}
             
-            return variants, variant_annotations
+                return variants, variant_annotations
             
         except FileNotFoundError:
             print(f"Error: File not found - {file_path}")
@@ -101,14 +101,14 @@ class VariantMACPipeline:
             print(f"Error reading {file_path}: {e}")
             return [], {} 
 
-    def load_vep_data(self):
-        """Load a single VEP file and add to lookup dictionary."""
-        vep_path = Path(vep_file)
-        if not vep_path.exists():
-            print(f"Warning: VEP file not found: {vep_file}")
-            return
-            
-        try:
+    def load_vep_file(self, vep_file):  
+    """Load a single VEP file and add to lookup dictionary."""
+    vep_path = Path(vep_file)
+    if not vep_path.exists():
+        print(f"Warning: VEP file not found: {vep_file}")
+        return
+        
+    try:
             # Try different separators
             separators = ['\t', ',']
             vep_df = None
