@@ -62,7 +62,7 @@ class VariantMACPipeline:
 
                 # Parse second line (annotations)
                 second_line = lines[1].strip()
-                second_parts = first_line.split()
+                second_parts = second_line.split()
 
                 variants = []
                 variant_annotations = {}
@@ -708,7 +708,7 @@ Examples:
         print(f"  Sequencing type: {args.sequencing_type} ({'gnomADe_AF' if args.sequencing_type.upper() == 'WES' else 'gnomADg_AF'})")
     else:
         print("  VEP files: None (will skip VEP annotations)")
-        
+
     print(f"  Phenotype file: {args.phenotype_file}")
     print(f"  PLINK bfile: {args.bfile}")
     print(f"  Output directory: {args.output_dir}")
