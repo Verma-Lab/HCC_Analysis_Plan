@@ -149,7 +149,7 @@ class VariantMACPipeline:
                 # Try to find alternative gnomAD columns
                 available_gnomad_cols = [col for col in vep_df.columns if 'gnomad' in col.lower()]
                 if available_gnomad_cols: 
-                    print(f" Available gnomAD columns: {available_gnomad_cols}")")
+                    print(f" Available gnomAD columns: {available_gnomad_cols}")
                 return
             
             # Store VEP data with Uploaded_variation as key
