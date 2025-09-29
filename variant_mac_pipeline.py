@@ -130,24 +130,33 @@ class VariantMACPipeline:
             # Determine which gnomAD column to use based on sequencing type
             gnomad_column = self.get_gnomad_column()
             
-            # Check for required columns
-            required_cols = ['Uploaded_variation', gnomad_column]
-            missing_cols = [col for col in required_cols if col not in vep_df.columns]
+            # Handle column names that may have # prefix
+            uploaded_var_col = None
+            if 'Uploaded_variation' in vep_df.columns:
+                uploaded_var_col = 'Uploaded_variation'
+            elif '#Uploaded_variation' in vep_df.columns:
+                uploaded_var_col = '#Uploaded_variation'
+
+            if uploaded_var_col is None:
+                print(f" Warning: Could not find Uploaded_variation column in {vep_file}")
+                print(f"  Available columns: {list(vep_df.columns)}")
+                return
             
-            if missing_cols:
-                print(f"  Warning: Missing columns in {vep_file}: {missing_cols}")
+            #Check for gnomAD column 
+            if gnomad_column not in vep_df.columns:
+                print(f" Warning: Missing column in {vep_file}: {gnoma_column}")
                 print(f"  Available columns: {list(vep_df.columns)}")
                 # Try to find alternative gnomAD columns
                 available_gnomad_cols = [col for col in vep_df.columns if 'gnomad' in col.lower()]
-                if available_gnomad_cols:
-                    print(f"  Available gnomAD columns: {available_gnomad_cols}")
+                if available_gnomad_cols: 
+                    print(f" Available gnomAD columns: {available_gnomad_cols}")")
                 return
             
             # Store VEP data with Uploaded_variation as key
             for _, row in vep_df.iterrows():
-                variant_id = row['Uploaded_variation']
+                variant_id = row[uploaded_var_col]
                 self.vep_data[variant_id] = {
-                    'gnomAD_AF': row[gnomad_column],  # Use generic key name
+                    'gnomAD_AF': row[gnomad_column],  
                     'source_file': vep_path.name,
                     'sequencing_type': self.args.sequencing_type
                 }
