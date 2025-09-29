@@ -144,7 +144,7 @@ class VariantMACPipeline:
             
             #Check for gnomAD column 
             if gnomad_column not in vep_df.columns:
-                print(f" Warning: Missing column in {vep_file}: {gnoma_column}")
+                print(f" Warning: Missing column in {vep_file}: {gnomad_column}")
                 print(f"  Available columns: {list(vep_df.columns)}")
                 # Try to find alternative gnomAD columns
                 available_gnomad_cols = [col for col in vep_df.columns if 'gnomad' in col.lower()]
