@@ -13,7 +13,9 @@ python3 variant_mac_pipeline.py \
   --bfile /static/PMBB/PMBB-Release-2024-3.0/Exome/pVCF/NF_all_variants/PMBB-Release-2024-3.0_genetic_exome_NF \
   --output-dir /home/agaro/verma_shared/projects/HCC/PMBB_6Gene_Burden_Analysis_030625/ALL_ALL/Variant_Level_Analysis_Test \
   --case-column HCC_Cancer_Free \
-  --id-column person_id
+  --id-column person_id \
+  --clinvar-file /path/to/Clinvar_inclusion_list.txt
+
 
 This pipeline:
 1. Extracts variants from group files and combines them 
@@ -21,7 +23,8 @@ This pipeline:
 3. Runs PLINK2 genotype counting for cases and controls
 4. Calculates Minor Allele Counts (MAC) for both groups
 5. Adds gnomAD allele frequency column and variant annotation columns
-5. Creates final summary: MAC_case_control_summary.txt
+6. Adds ClinVar clinical significance based on annotation type
+7. Creates final summary: MAC_case_control_summary.txt
 
 """
 
@@ -41,10 +44,14 @@ class VariantMACPipeline:
         self.output_dir = Path(args.output_dir)
         self.output_dir.mkdir(parents = True, exist_ok= True)
 
-        #Store the group file to annotation mapping
+        # Store the group file to annotation mapping
         self.group_annotations = {}
-        #Store VEP data for lookup 
+        # Store VEP data for lookup 
         self.vep_data = {}
+        # Store ClinVar data for lookup
+        self.clinvar_data = {}
+        # Store VEP files by chromosome for CLIN_SIG lookup
+        self.vep_files_by_chr = {}
 
     def extract_variants_from_file(self, file_path):
         """Extract variants from the group file after the 'var' keyword and map to annotations."""
@@ -108,6 +115,13 @@ class VariantMACPipeline:
             print(f"Warning: VEP file not found: {vep_file}")
             return
         
+        # Extract chromosomes from filename for later CLIN_SIG lookup
+        chr_match = re.search(r'chr[_\s]?(\d+|X|Y|MT)', vep_path.name, re.IGNORECASE)
+        if chr_match:
+            chr_num = chr_match.group(1)
+            self.vep_files_by_chr[chr_num] = vep_path
+            print(f"  Mapped chromosome {chr_num} to {vep_path.name}")
+
         try:
             # Try different separators
             separators = ['\t', ',']
@@ -158,9 +172,10 @@ class VariantMACPipeline:
                 self.vep_data[variant_id] = {
                     'gnomAD_AF': row[gnomad_column],  
                     'source_file': vep_path.name,
-                    'sequencing_type': self.args.sequencing_type
+                    'sequencing_type': self.args.sequencing_type,
+                    'CLIN_SIG': row.get('CLIN_SIG', '-')
                 }
-            
+
             print(f"  Added {len(vep_df)} variant annotations from {vep_path.name}")
             
         except Exception as e:
@@ -181,6 +196,62 @@ class VariantMACPipeline:
         
         print(f"Total VEP annotations loaded: {len(self.vep_data)}")
     
+    def load_clinvar_data(self):
+        """Load ClinVar file for pLoF variant clinical significance lookup."""
+        if not self.args.clinvar_file:
+            print("No ClinVar file provided - skipping ClinVar annotations")
+            return
+        
+        clinvar_path = Path(self.args.clinvar_file)
+        if not clinvar_path.exists():
+            print(f"Warning: ClinVar file not found: {self.args.clinvar_file}")
+            return
+        
+        print(f"Loading ClinVar file for clinical significance lookup...")
+        
+        try:
+            # Try different separators
+            separators = ['\t', ',']
+            clinvar_df = None
+            
+            for sep in separators:
+                try:
+                    clinvar_df = pd.read_csv(clinvar_path, sep=sep, low_memory=False)
+                    if len(clinvar_df.columns) > 5:  # Reasonable number of columns
+                        print(f"  Successfully loaded ClinVar with separator: '{sep}'")
+                        break
+                except:
+                    continue
+            
+            if clinvar_df is None:
+                print(f"Warning: Could not parse ClinVar file: {self.args.clinvar_file}")
+                return
+            
+            print(f"  Loaded ClinVar: {len(clinvar_df)} rows, {len(clinvar_df.columns)} columns")
+            
+            # Check for required columns
+            if 'ID' not in clinvar_df.columns:
+                print(f"Warning: 'ID' column not found in ClinVar file")
+                print(f"  Available columns: {list(clinvar_df.columns)}")
+                return
+            
+            if 'ClinVar_202407_GRCh38.clinical_significance_ordered' not in clinvar_df.columns:
+                print(f"Warning: 'ClinVar_202407_GRCh38.clinical_significance_ordered' column not found")
+                print(f"  Available columns: {list(clinvar_df.columns)}")
+                return
+            
+            # Store ClinVar data with ID as key
+            for _, row in clinvar_df.iterrows():
+                variant_id = row['ID']
+                self.clinvar_data[variant_id] = {
+                    'clinical_significance': row['ClinVar_202407_GRCh38.clinical_significance_ordered']
+                }
+            
+            print(f"  Added {len(self.clinvar_data)} ClinVar annotations")
+            
+        except Exception as e:
+            print(f"Error loading ClinVar file: {e}")
+
     def get_gnomad_column(self):
         """Determine which gnomAD column to use based on sequencing type."""
         if self.args.sequencing_type.lower() == 'wes':
@@ -479,6 +550,67 @@ class VariantMACPipeline:
             print(f"Error processing {gcount_file}: {e}")
             return None
 
+    def get_clin_sig_from_vep(self, variant_id, chromosome):
+        """Get CLIN_SIG from VEP file for damaging_missense variants."""
+        # First check if we already have it in memory
+        if variant_id in self.vep_data and 'CLIN_SIG' in self.vep_data[variant_id]:
+            clin_sig = self.vep_data[variant_id]['CLIN_SIG']
+            # Return '-' if it's empty or NA
+            if pd.isna(clin_sig) or clin_sig == '' or clin_sig == '-':
+                return '-'
+            return clin_sig
+        
+        # If not in memory, return '-'
+        return '-'
+
+    def add_clinical_significance(self, merged_df):
+        """Add ClinVar_CLIN_SIG column based on annotation type."""
+        if not self.args.clinvar_file:
+            print("  Skipping ClinVar clinical significance (no ClinVar file provided)")
+            return merged_df
+        
+        print("  Adding ClinVar clinical significance...")
+        
+        clin_sig_values = []
+        plof_not_found = []
+        
+        for idx, row in merged_df.iterrows():
+            variant_id = row['ID']
+            annotation = row['Annotation']
+            chromosome = str(row['#CHROM'])
+            
+            if annotation == 'pLoF':
+                # Look up in ClinVar data
+                if variant_id in self.clinvar_data:
+                    clin_sig = self.clinvar_data[variant_id]['clinical_significance']
+                    clin_sig_values.append(clin_sig)
+                else:
+                    clin_sig_values.append('NOT_FOUND_IN_CLINVAR')
+                    plof_not_found.append(variant_id)
+            
+            elif annotation == 'damaging_missense':
+                # Look up in VEP CLIN_SIG column
+                clin_sig = self.get_clin_sig_from_vep(variant_id, chromosome)
+                clin_sig_values.append(clin_sig)
+            
+            else:
+                clin_sig_values.append('UNKNOWN_ANNOTATION')
+        
+        merged_df['ClinVar_CLIN_SIG'] = clin_sig_values
+        
+        # Report pLoF variants not found in ClinVar
+        if plof_not_found:
+            print(f"  WARNING: {len(plof_not_found)} pLoF variants not found in ClinVar file:")
+            print(f"           This may indicate ref/alt allele flipping issues")
+            not_found_file = self.output_dir / "plof_variants_not_found_in_clinvar.txt"
+            with open(not_found_file, 'w') as f:
+                f.write("Variant_ID\n")
+                for var in plof_not_found:
+                    f.write(f"{var}\n")
+            print(f"           List saved to: {not_found_file}")
+        
+        return merged_df
+
     def process_mac_results(self, cases_gcount_file, controls_gcount_file):
         """Process MAC results and create final summary with annotations and gnomAD column."""
         print("Step 4: Calculating MAC and creating summary...")
@@ -504,23 +636,26 @@ class VariantMACPipeline:
                 on=['#CHROM', 'ID', 'REF', 'ALT']
             )
             
-            #Add gnomAD column
+            # Add gnomAD column
             gnomad_column_name = f"gnomAD_AF_{self.args.sequencing_type.upper()}"
             print(f"  Adding VEP annotations ({gnomad_column_name})...")
             merged_df[gnomad_column_name] = merged_df['ID'].map(
                 lambda x: self.vep_data.get(x, {}).get('gnomAD_AF', 'NA')
             )
 
-            #Add variant annotations
+            # Add variant annotations
             print("  Adding group-based annotations...")
             merged_df['Annotation'] = merged_df['ID'].map(
                 lambda x: self.group_annotations.get(x, 'unknown')
             )
 
+            # Add ClinVar clinical significance
+            merged_df = self.add_clinical_significance(merged_df)
+
             # Reorder columns
             gnomad_column_name = f"gnomAD_AF_{self.args.sequencing_type.upper()}"
             column_order = ['#CHROM', 'ID', 'REF', 'ALT', 'Annotation', 'MAC_Case', 'MAC_Control', 
-                          gnomad_column_name]
+                          gnomad_column_name, 'ClinVar_CLIN_SIG']
             merged_df = merged_df[column_order]
 
             # Save results
@@ -548,8 +683,11 @@ class VariantMACPipeline:
         print("Starting Variant MAC Pipeline...")
         print("="*50)
         
-        #Load VEP data
+        # Load VEP data
         self.load_all_vep_data()
+
+        # Load ClinVar data
+        self.load_clinvar_data()
 
         # Step 1: Combine group files
         variants_file = self.combine_group_files()
@@ -600,7 +738,7 @@ def check_dependencies():
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Variant MAC Pipeline - Extract variants, variant annotations, gnomad column, process phenotypes, run PLINK, and calculate MAC",
+        description="Variant MAC Pipeline - Extract variants, variant annotations, gnomad column, ClinVar clinical significance process phenotypes, run PLINK, and calculate MAC",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -608,6 +746,7 @@ Examples:
   python3 variant_mac_pipeline.py \\
     --group-files cancer_genes.*.txt \\
     --vep-files vep_gene1.txt vep_gene2.txt \\
+    --clinvar-file ClinVar_Inclusion.txt \\
     --sequencing-type WES \\
     --phenotype-file phenotypes.csv \\
     --bfile /path/to/plink_files \\
@@ -617,6 +756,7 @@ Examples:
   python3 variant_mac_pipeline.py \\
     --group-files cancer_genes.*.txt \\
     --vep-files vep_gene1.txt vep_gene2.txt \\
+    --clinvar-file ClinVar_Inclusion.txt \\
     --sequencing-type WGS \\
     --phenotype-file phenotypes.csv \\
     --bfile /path/to/plink_files \\
@@ -626,6 +766,7 @@ Examples:
   python3 variant_mac_pipeline.py \\
     --group-dir /path/to/group/files/ \\
     --vep-files /path/to/vep/*.txt \\
+    --clinvar-file /path/to/clinvar.txt \\
     --sequencing-type WES \\
     --phenotype-file phenotypes.csv \\
     --bfile /path/to/plink_files \\
@@ -650,6 +791,12 @@ Examples:
         "--vep-files",
         nargs="*",
         help="VEP annotation files (optional - supports multiple files)"
+    )
+
+    # ClinVar file
+    parser.add_argument(
+        "--clinvar-file",
+        help="ClinVar file for clinical significance annotation (optional)"
     )
 
     # Sequencing type for gnomAD column =
@@ -677,7 +824,6 @@ Examples:
         help="Output directory for results"
     )
     
-    # Optional arguments with defaults
     parser.add_argument(
         "--case-column", 
         default="HCC_Cancer_Free",
@@ -717,6 +863,11 @@ Examples:
         print(f"  Sequencing type: {args.sequencing_type} ({'gnomADe_AF' if args.sequencing_type.upper() == 'WES' else 'gnomADg_AF'})")
     else:
         print("  VEP files: None (will skip VEP annotations)")
+
+    if args.clinvar_file:
+        print(f"  ClinVar file: {args.clinvar_file}")
+    else:
+        print("  ClinVar file: None (will skip ClinVar annotations)")
 
     print(f"  Phenotype file: {args.phenotype_file}")
     print(f"  PLINK bfile: {args.bfile}")
