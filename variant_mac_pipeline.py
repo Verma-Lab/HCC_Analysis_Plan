@@ -909,10 +909,20 @@ class VariantMACPipeline:
             merged_df['Annotation'] = merged_df['ID'].map(
                 lambda x: self.group_annotations.get(x, 'unknown')
             )
+            
+            CHR_TO_GENE = {
+                '2':  'MSH6',
+                '7':  'PMS2',
+                '13': 'BRCA2',
+                '16': 'FANCA',
+                '17': 'BRIP1',
+                '22': 'CHEK2',
+            }
 
-            merged_df['Gene'] = merged_df['ID'].map(
-                lambda x: self.variant_to_gene.get(x, 'unknown')
-            )
+            merged_df['Gene'] = merged_df['#CHROM'].astype(str).str.replace(
+                r'^chr', '', regex=True
+            ).map(lambda x: CHR_TO_GENE.get(x, x))
+
 
             # Add ClinVar clinical significance
             merged_df = self.add_clinical_significance(merged_df)
