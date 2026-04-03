@@ -3,7 +3,13 @@
 """
 Variant Mac Pipeline 
 
-Pipeline to calculate minor allele counts (MAC) for cases and controls from variants in group files, with gnomAD allele frequencies from VEP annotation files and variant annotations derived from group file classifications.
+Pipeline to calculate minor allele counts (MAC) and carrier frequencies for cases 
+and controls from variants in group files, with gnomAD allele frequencies from VEP 
+annotation files and variant annotations derived from group file classifications.
+
+Also includes ancestry-stratified carrier frequnecy tables to address reviewer 
+requests for frequency of each variant category (pLoF, damaging_missense, combines)
+in cases and controls per ancestry subgroup.
 
 EXAMPLE USAGE:
 python3 variant_mac_pipeline.py \
@@ -14,17 +20,20 @@ python3 variant_mac_pipeline.py \
   --output-dir /home/agaro/verma_shared/projects/HCC/PMBB_6Gene_Burden_Analysis_030625/ALL_ALL/Variant_Level_Analysis_Test \
   --case-column HCC_Cancer_Free \
   --id-column person_id \
+  --biobank PMBB \
+  --ancestry-column ancestry \
   --clinvar-file /path/to/Clinvar_inclusion_list.txt
 
 
 This pipeline:
 1. Extracts variants from group files and combines them 
-2. Creates PLINK keep files for cases (HCC_Cancer_Free=1) and controls (HCC_Cancer_Free=0)
+2. Creates PLINK keep files for cases (HCC_Cancer_Free=1) and controls (HCC_Cancer_Free=0), including ancestry-stratiied keep files for each subgroup
 3. Runs PLINK2 genotype counting for cases and controls
 4. Calculates Minor Allele Counts (MAC) for both groups
 5. Adds gnomAD allele frequency column and variant annotation columns
 6. Adds ClinVar clinical significance based on annotation type
 7. Creates final summary: MAC_case_control_summary.txt
+8. Creates per-gene carrier frequency tables stratified by ancestry and case/controls: (gene_carrier_frequency_table.tsv and gene_carrier_frequency_wide.tsv)
 
 """
 
@@ -46,6 +55,8 @@ class VariantMACPipeline:
 
         # Store the group file to annotation mapping
         self.group_annotations = {}
+        #Store variant -> gene name mapping
+        self.variant_to_gene = {}
         # Store VEP data for lookup 
         self.vep_data = {}
         # Store ClinVar data for lookup
@@ -53,8 +64,27 @@ class VariantMACPipeline:
         # Store VEP files by chromosome for CLIN_SIG lookup
         self.vep_files_by_chr = {}
 
+    # ──────────────────────────────────────────────────────────────────────────
+    # Group file parsing
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def extract_gene_from_filename(self, file_path):
+        """Extract gene name from a group file name.
+
+        Handles naming patterns like:
+          cancer_genes.BRCA2.txt  ->  BRCA2
+          BRCA2_groupfile.txt     ->  BRCA2_groupfile
+        Falls back to the full stem if no dot-separated gene can be identified.
+        """
+        stem = Path(file_path).stem          # e.g. "cancer_genes.BRCA2"
+        parts = stem.split('.')
+        if len(parts) >= 2:
+            return parts[-1]                 # rightmost dot-separated token
+        return stem
+
+
     def extract_variants_from_file(self, file_path):
-        """Extract variants from the group file after the 'var' keyword and map to annotations."""
+        """Extract variants from the group file after the 'var' keyword and map to annotations and gene."""
         try:
             with open(file_path, "r") as file:
                 lines = file.readlines()
@@ -63,7 +93,7 @@ class VariantMACPipeline:
                     print(f"Warning: Expected at least 2 lines in {file_path}")
                     return [], {}
                 
-                # Parse first line (variants)
+                # Parse first line (gene name and variants)
                 first_line = lines[0].strip()
                 first_parts = first_line.split() 
 
@@ -84,7 +114,7 @@ class VariantMACPipeline:
                         anno_index = second_parts.index("anno")
                         annotations = second_parts[anno_index + 1:]
 
-                        # Map variants to their annotations
+                        # Map variants to their annotations and gene 
                         if len(variants) == len(annotations):
                             for variant, annotation in zip(variants, annotations):
                                variant_annotations[variant] = annotation
@@ -107,6 +137,10 @@ class VariantMACPipeline:
         except Exception as e:
             print(f"Error reading {file_path}: {e}")
             return [], {} 
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # VEP / ClinVar loading
+    # ──────────────────────────────────────────────────────────────────────────
 
     def load_vep_file(self, vep_file):  
         """Load a single VEP file and add to lookup dictionary."""
@@ -262,6 +296,10 @@ class VariantMACPipeline:
             print(f"Warning: Unknown sequencing type '{self.args.sequencing_type}'. Defaulting to WES (gnomADe_AF)")
             return 'gnomADe_AF'
 
+    # ──────────────────────────────────────────────────────────────────────────
+    # Group file discovery and combination
+    # ──────────────────────────────────────────────────────────────────────────
+
     def find_group_files(self):
         """Find group files based on the provided pattern or directory."""
         group_files = []
@@ -300,142 +338,171 @@ class VariantMACPipeline:
         return validated_files
 
     def combine_group_files(self):
-        """Extract and combine variants from all group files with annotation mapping."""
+        """Extract and combine variants from all group files with annotation mapping.
+
+        Also populates self.variant_to_gene so that the frequency table step
+        can aggregate by gene name.
+        """
         print("Step 1: Extracting and combining variants from group files...")
-        
+
         group_files = self.find_group_files()
         if not group_files:
             print("No valid group files found!")
             return None
-        
+
         all_variants = []
         variants_per_file = {}
-        
+
         for file_path in group_files:
             print(f"  Processing: {file_path.name}")
             variants, variant_annotations = self.extract_variants_from_file(file_path)
 
+            gene_name = self.extract_gene_from_filename(file_path)
+
             variants_per_file[file_path.name] = {
                 'variants': variants,
-                'annotations': variant_annotations
+                'annotations': variant_annotations,
+                'gene': gene_name
             }
-        
-            # Store annotation for each variant (individual variant-level annotations)
+
             for variant, annotation in variant_annotations.items():
                 self.group_annotations[variant] = annotation
-            
+                self.variant_to_gene[variant] = gene_name   # NEW
+
             all_variants.extend(variants)
-            
-            # Show annotation distribution for this file
+
             if variant_annotations:
                 anno_counts = {}
                 for anno in variant_annotations.values():
                     anno_counts[anno] = anno_counts.get(anno, 0) + 1
-                print(f"    Found {len(variants)} variants with annotations: {dict(anno_counts)}")
+                print(f"    Gene: {gene_name} | {len(variants)} variants | annotations: {dict(anno_counts)}")
             else:
-                print(f"    Found {len(variants)} variants (no annotations)")
+                print(f"    Gene: {gene_name} | {len(variants)} variants (no annotations)")
 
-        # Remove duplicates while preserving order
         unique_variants = list(dict.fromkeys(all_variants))
-        
-        # Write combined variants file
+
         output_file = self.output_dir / "all_group_file_variants_combined.txt"
         with open(output_file, "w") as file:
             for variant in unique_variants:
                 file.write(variant + "\n")
-        
+
         print(f"  Created: {output_file}")
         print(f"  Total unique variants: {len(unique_variants)} (from {len(all_variants)} total)")
-        
-        # Write annotation mapping file for reference
+
         annotation_file = self.output_dir / "variant_annotation_mapping.txt"
         with open(annotation_file, "w") as file:
-            file.write("Variant_ID\tAnnotation\tSource_File\n")
+            file.write("Variant_ID\tGene\tAnnotation\tSource_File\n")
             for variant, annotation in self.group_annotations.items():
-                # Find which file this variant came from
                 source_file = "unknown"
+                gene = self.variant_to_gene.get(variant, "unknown")
                 for fname, fdata in variants_per_file.items():
                     if variant in fdata.get('annotations', {}):
                         source_file = fname
                         break
-                file.write(f"{variant}\t{annotation}\t{source_file}\n")
+                file.write(f"{variant}\t{gene}\t{annotation}\t{source_file}\n")
         print(f"  Created annotation mapping: {annotation_file}")
-        
-        # Show overall annotation distribution
+
         overall_anno_counts = {}
         for anno in self.group_annotations.values():
             overall_anno_counts[anno] = overall_anno_counts.get(anno, 0) + 1
         print(f"  Overall annotation distribution: {dict(overall_anno_counts)}")
-        
+
         return output_file
+    
+    # ──────────────────────────────────────────────────────────────────────────
+    # PLINK keep-file creation (overall + ancestry-stratified)
+    # ──────────────────────────────────────────────────────────────────────────
 
     def create_plink_files(self):
-        """Create PLINK keep files for cases and controls."""
+        """Create PLINK keep files for cases/controls (overall and per ancestry).
+
+        Returns
+        -------
+        cases_file, controls_file : Path
+            Overall case/control keep files (unchanged from original).
+        ancestry_keep_files : dict
+            Keys are (ancestry, 'cases'|'controls'), values are (Path, int N).
+        """
         print("Step 2: Creating PLINK keep files from phenotype data...")
-        
+
         phenotype_file = self.args.phenotype_file
         case_column = self.args.case_column
         id_column = self.args.id_column
-        
+        ancestry_column = self.args.ancestry_column
+
         try:
-            # Try different separators
             separators = [',', '\t', ' ']
             df = None
-            
+
             for sep in separators:
                 try:
                     df = pd.read_csv(phenotype_file, sep=sep, header='infer')
-                    if len(df.columns) > 1:  # Successfully parsed with multiple columns
+                    if len(df.columns) > 1:
                         print(f"  Successfully loaded with separator: '{sep}'")
                         break
-                except:
+                except Exception:
                     continue
-            
+
             if df is None:
                 raise ValueError("Could not parse phenotype file with any separator")
-            
+
             print(f"  Loaded phenotype file with {len(df)} individuals and {len(df.columns)} columns")
             print(f"  Columns: {list(df.columns)}")
-            
-            # Validate required columns exist
+
             if case_column not in df.columns:
-                print(f"Available columns: {list(df.columns)}")
                 raise ValueError(f"Case column '{case_column}' not found in phenotype file")
             if id_column not in df.columns:
-                print(f"Available columns: {list(df.columns)}")
                 raise ValueError(f"ID column '{id_column}' not found in phenotype file")
-            
-            # Show case/control distribution
+
             case_counts = df[case_column].value_counts()
             print(f"  Case/control distribution: {dict(case_counts)}")
-            
-            # Create cases file
+
+            # ── Overall cases ────────────────────────────────────────────────
             df_cases = df[df[case_column] == 1]
-            df_cases_plink = pd.DataFrame({
-                'FID': df_cases[id_column],
-                'IID': df_cases[id_column]
-            })
-            
+            df_cases_plink = pd.DataFrame({'FID': df_cases[id_column], 'IID': df_cases[id_column]})
             cases_file = self.output_dir / "hcc_cases_fid_iid_plink_keep.txt"
             df_cases_plink.to_csv(cases_file, sep='\t', index=False, header=True)
             print(f"  Created cases file: {cases_file} ({len(df_cases_plink)} individuals)")
-            
-            # Create controls file
+
+            # ── Overall controls ─────────────────────────────────────────────
             df_controls = df[df[case_column] == 0]
-            df_controls_plink = pd.DataFrame({
-                'FID': df_controls[id_column],
-                'IID': df_controls[id_column]
-            })
-            
+            df_controls_plink = pd.DataFrame({'FID': df_controls[id_column], 'IID': df_controls[id_column]})
             controls_file = self.output_dir / "cancer_free_controls_fid_iid_plink_keep.txt"
             df_controls_plink.to_csv(controls_file, sep='\t', index=False, header=True)
             print(f"  Created controls file: {controls_file} ({len(df_controls_plink)} individuals)")
-            
-            return cases_file, controls_file
-            
+
+            # ── Ancestry-stratified keep files ───────────────────────────────
+            ancestry_keep_files = {}
+
+            if ancestry_column and ancestry_column in df.columns:
+                ancestries = sorted(df[ancestry_column].dropna().unique())
+                print(f"  Ancestry groups found: {list(ancestries)}")
+
+                for ancestry in ancestries:
+                    for status, label in [(1, 'cases'), (0, 'controls')]:
+                        subset = df[(df[ancestry_column] == ancestry) & (df[case_column] == status)]
+                        if len(subset) == 0:
+                            continue
+                        plink_df = pd.DataFrame({'FID': subset[id_column], 'IID': subset[id_column]})
+                        fname = self.output_dir / f"{ancestry}_{label}_plink_keep.txt"
+                        plink_df.to_csv(fname, sep='\t', index=False, header=True)
+                        ancestry_keep_files[(ancestry, label)] = (fname, len(subset))
+                        print(f"    Created: {fname.name} ({len(subset)} individuals)")
+            else:
+                if ancestry_column:
+                    print(f"  Warning: Ancestry column '{ancestry_column}' not found — skipping ancestry stratification")
+                else:
+                    print("  No --ancestry-column provided — skipping ancestry stratification")
+
+            return cases_file, controls_file, ancestry_keep_files
+
         except Exception as e:
             print(f"Error processing phenotype file: {e}")
             sys.exit(1)
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # PLINK execution
+    # ──────────────────────────────────────────────────────────────────────────
 
     def check_plink_availability(self):
         """Check if PLINK2 is available in the system."""
@@ -450,88 +517,74 @@ class VariantMACPipeline:
             print("  Please ensure PLINK2 is installed and accessible")
             return False
 
-    def run_plink_commands(self, variants_file, cases_file, controls_file):
-        """Run PLINK commands to generate geno-counts."""
+    def _run_single_plink_gcount(self, variants_file, keep_file, output_prefix):
+        """Run one plink2 --geno-counts call. Returns .gcount path or None on failure."""
+        cmd = [
+            "plink2",
+            "--bfile", str(self.args.bfile),
+            "--extract", str(variants_file),
+            "--keep", str(keep_file),
+            "--geno-counts",
+            "--out", str(output_prefix)
+        ]
+        print(f"    Command: {' '.join(cmd)}")
+        try:
+            subprocess.run(cmd, capture_output=True, text=True, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"    PLINK error (return code {e.returncode})")
+            if e.stderr:
+                print(f"    STDERR: {e.stderr[:500]}")
+            return None
+        except FileNotFoundError:
+            print("    Error: plink2 executable not found")
+            return None
+
+        gcount_file = f"{output_prefix}.gcount"
+        if not os.path.exists(gcount_file):
+            print(f"    Error: Expected output not found: {gcount_file}")
+            return None
+        return gcount_file
+
+    def run_plink_commands(self, variants_file, cases_file, controls_file, ancestry_keep_files=None):
+        """Run PLINK geno-counts for overall cases/controls and all ancestry strata."""
         print("Step 3: Running PLINK commands...")
-        
-        # Check PLINK availability first
+
         if not self.check_plink_availability():
-            print("  PLINK2 not available. Cannot proceed with genotype counting.")
-            return None, None
-        
-        bfile = self.args.bfile
-        
-        # PLINK command for cases
-        cases_output = self.output_dir / "cases_geno_counts"
-        cmd_cases = [
-            "plink2",
-            "--bfile", str(bfile),
-            "--extract", str(variants_file),
-            "--keep", str(cases_file),
-            "--geno-counts",
-            "--out", str(cases_output)
-        ]
-        
-        # PLINK command for controls
-        controls_output = self.output_dir / "controls_geno_counts"
-        cmd_controls = [
-            "plink2",
-            "--bfile", str(bfile),
-            "--extract", str(variants_file),
-            "--keep", str(controls_file),
-            "--geno-counts",
-            "--out", str(controls_output)
-        ]
-        
-        print("  Running PLINK for cases...")
-        print(f"    Command: {' '.join(cmd_cases)}")
-        
-        try:
-            result_cases = subprocess.run(cmd_cases, capture_output=True, text=True, check=True)
-            print(f"    Cases PLINK completed successfully")
-        except subprocess.CalledProcessError as e:
-            print(f"    Error running PLINK for cases:")
-            print(f"    Return code: {e.returncode}")
-            if e.stderr:
-                print(f"    STDERR: {e.stderr}")
-            return None, None
-        except FileNotFoundError:
-            print(f"    Error: PLINK2 executable not found")
-            return None, None
-        
-        print("  Running PLINK for controls...")
-        print(f"    Command: {' '.join(cmd_controls)}")
-        
-        try:
-            result_controls = subprocess.run(cmd_controls, capture_output=True, text=True, check=True)
-            print(f"    Controls PLINK completed successfully")
-        except subprocess.CalledProcessError as e:
-            print(f"    Error running PLINK for controls:")
-            print(f"    Return code: {e.returncode}")
-            if e.stderr:
-                print(f"    STDERR: {e.stderr}")
-            return None, None
-        except FileNotFoundError:
-            print(f"    Error: PLINK2 executable not found")
-            return None, None
-        
-        # Verify output files were created
-        cases_gcount_file = f"{cases_output}.gcount"
-        controls_gcount_file = f"{controls_output}.gcount"
-        
-        if not os.path.exists(cases_gcount_file):
-            print(f"    Error: Expected output file not found: {cases_gcount_file}")
-            return None, None
-        
-        if not os.path.exists(controls_gcount_file):
-            print(f"    Error: Expected output file not found: {controls_gcount_file}")
-            return None, None
-        
-        print(f"    Generated files:")
-        print(f"      Cases: {cases_gcount_file}")
-        print(f"      Controls: {controls_gcount_file}")
-        
-        return cases_gcount_file, controls_gcount_file
+            print("  PLINK2 not available. Cannot proceed.")
+            return None, None, {}
+
+        # Overall
+        print("  Running PLINK for all cases...")
+        cases_gcount = self._run_single_plink_gcount(
+            variants_file, cases_file, self.output_dir / "cases_geno_counts"
+        )
+
+        print("  Running PLINK for all controls...")
+        controls_gcount = self._run_single_plink_gcount(
+            variants_file, controls_file, self.output_dir / "controls_geno_counts"
+        )
+
+        if cases_gcount is None or controls_gcount is None:
+            return None, None, {}
+
+        # Ancestry-stratified
+        ancestry_gcount_files = {}
+        if ancestry_keep_files:
+            print("  Running PLINK for ancestry-stratified groups...")
+            for (ancestry, label), (keep_file, n) in ancestry_keep_files.items():
+                print(f"    {ancestry} {label}...")
+                prefix = self.output_dir / f"{ancestry}_{label}_geno_counts"
+                gcount = self._run_single_plink_gcount(variants_file, keep_file, prefix)
+                if gcount:
+                    ancestry_gcount_files[(ancestry, label)] = (gcount, n)
+                else:
+                    print(f"    Warning: PLINK failed for {ancestry} {label} — skipping")
+
+        return cases_gcount, controls_gcount, ancestry_gcount_files
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # MAC calculation 
+    # ──────────────────────────────────────────────────────────────────────────
 
     def calculate_mac(self, gcount_file):
         """Calculate MAC from a PLINK .gcount file."""
@@ -549,6 +602,194 @@ class VariantMACPipeline:
         except Exception as e:
             print(f"Error processing {gcount_file}: {e}")
             return None
+
+    def _carrier_counts_from_gcount(self, gcount_file):
+        """Load a .gcount file and add n_carriers and N columns.
+
+        n_carriers = individuals carrying ≥1 ALT allele (HET + HOM_ALT)
+        N          = total genotyped individuals in this group
+        """
+        try:
+            df = pd.read_csv(gcount_file, sep="\t")
+            df['n_carriers'] = df['HET_REF_ALT_CTS'] + df['TWO_ALT_GENO_CTS']
+            df['N'] = df['HOM_REF_CT'] + df['HET_REF_ALT_CTS'] + df['TWO_ALT_GENO_CTS']
+            return df
+        except Exception as e:
+            print(f"Error loading {gcount_file}: {e}")
+            return None
+
+    def _aggregate_carriers_by_gene(self, gcount_file, group_n_override=None):
+        """Aggregate carrier counts by (gene, annotation) for one group.
+
+        Parameters
+        ----------
+        gcount_file : str
+            Path to a PLINK .gcount file.
+        group_n_override : int or None
+            If provided, use this as N instead of the per-row N from gcount
+            (useful when PLINK may drop individuals with missing genotypes).
+
+        Returns
+        -------
+        dict : {gene: {annotation: {'n_carriers': int, 'N': int}}}
+        """
+        df = self._carrier_counts_from_gcount(gcount_file)
+        if df is None:
+            return {}
+
+        results = {}
+
+        for _, row in df.iterrows():
+            variant_id = row['ID']
+            gene = self.variant_to_gene.get(variant_id, 'unknown')
+            annotation = self.group_annotations.get(variant_id, 'unknown')
+            n_carriers = int(row['n_carriers'])
+            N = group_n_override if group_n_override is not None else int(row['N'])
+
+            if gene not in results:
+                results[gene] = {}
+            if annotation not in results[gene]:
+                results[gene][annotation] = {'n_carriers': 0, 'N': N}
+
+            results[gene][annotation]['n_carriers'] += n_carriers
+            # Take the maximum N seen (should be constant across variants in same group)
+            results[gene][annotation]['N'] = max(results[gene][annotation]['N'], N)
+
+        return results
+    
+    def create_frequency_summary_table(self, cases_gcount, controls_gcount,
+                                       ancestry_gcount_files,
+                                       cases_n, controls_n):
+        """Create per-gene carrier frequency tables stratified by ancestry.
+
+        Produces two output files:
+          gene_carrier_frequency_table.tsv  — long format (one row per gene/group/category)
+          gene_carrier_frequency_wide.tsv   — wide format matching Table 1 layout
+
+        Parameters
+        ----------
+        cases_gcount, controls_gcount : str
+            Overall gcount file paths.
+        ancestry_gcount_files : dict
+            {(ancestry, label): (gcount_path, N)}
+        cases_n, controls_n : int
+            Total N for overall cases/controls (from phenotype file).
+        """
+        print("Step 5 (NEW): Building per-gene carrier frequency table...")
+
+        ANNOTATIONS = ['pLoF', 'damaging_missense']
+
+        # ── Collect all groups ───────────────────────────────────────────────
+        # Each entry: (group_label, gcount_file, N)
+        groups = [
+            ('All_Cases',    cases_gcount,    cases_n),
+            ('All_Controls', controls_gcount, controls_n),
+        ]
+        for (ancestry, label), (gcount_path, n) in sorted(ancestry_gcount_files.items()):
+            group_label = f"{ancestry}_{'Cases' if label == 'cases' else 'Controls'}"
+            groups.append((group_label, gcount_path, n))
+
+        # ── Aggregate per group ──────────────────────────────────────────────
+        all_group_data = {}   # group_label -> {gene -> {anno -> {n_carriers, N}}}
+        genes_seen = set()
+
+        for group_label, gcount_file, n in groups:
+            agg = self._aggregate_carriers_by_gene(gcount_file, group_n_override=n)
+            all_group_data[group_label] = agg
+            genes_seen.update(agg.keys())
+
+        genes_sorted = sorted(g for g in genes_seen if g != 'unknown')
+        if 'unknown' in genes_seen:
+            genes_sorted.append('unknown')
+
+        # ── Long-format output ───────────────────────────────────────────────
+        long_rows = []
+        for group_label, _, _ in groups:
+            agg = all_group_data.get(group_label, {})
+            for gene in genes_sorted:
+                gene_data = agg.get(gene, {})
+                for anno in ANNOTATIONS:
+                    anno_data = gene_data.get(anno, {'n_carriers': 0, 'N': 0})
+                    n_c = anno_data['n_carriers']
+                    N   = anno_data['N']
+                    freq = (n_c / N) if N > 0 else 'NA'
+                    long_rows.append({
+                        'Biobank':     self.args.biobank,
+                        'Gene':        gene,
+                        'Group':       group_label,
+                        'Category':    anno,
+                        'n_carriers':  n_c,
+                        'N':           N,
+                        'Frequency':   round(freq, 6) if freq != 'NA' else 'NA'
+                    })
+
+                # Combined = pLoF + damaging_missense (sum, matching Table 1 approach)
+                plof_n = gene_data.get('pLoF', {'n_carriers': 0})['n_carriers']
+                dam_n  = gene_data.get('damaging_missense', {'n_carriers': 0})['n_carriers']
+                N_combined = gene_data.get('pLoF', gene_data.get('damaging_missense', {'N': 0})).get('N', 0)
+                comb_n = plof_n + dam_n
+                freq_comb = (comb_n / N_combined) if N_combined > 0 else 'NA'
+                long_rows.append({
+                    'Biobank':    self.args.biobank,
+                    'Gene':       gene,
+                    'Group':      group_label,
+                    'Category':   'pLoF_and_damaging',
+                    'n_carriers': comb_n,
+                    'N':          N_combined,
+                    'Frequency':  round(freq_comb, 6) if freq_comb != 'NA' else 'NA'
+                })
+
+        long_df = pd.DataFrame(long_rows)
+        long_file = self.output_dir / "gene_carrier_frequency_table.tsv"
+        long_df.to_csv(long_file, sep='\t', index=False)
+        print(f"  Saved long-format frequency table: {long_file}")
+
+        # ── Wide-format output (mirrors Table 1 layout) ──────────────────────
+        # Columns: Gene | Group | n_pLoF | pLoF_freq | n_damaging | damaging_freq | n_combined | combined_freq | N
+        wide_rows = []
+        for group_label, _, _ in groups:
+            agg = all_group_data.get(group_label, {})
+            for gene in genes_sorted:
+                gene_data = agg.get(gene, {})
+
+                plof   = gene_data.get('pLoF',             {'n_carriers': 0, 'N': 0})
+                dam    = gene_data.get('damaging_missense', {'n_carriers': 0, 'N': 0})
+                N      = max(plof['N'], dam['N'])
+                comb_n = plof['n_carriers'] + dam['n_carriers']
+
+                def fmt_freq(n, denom):
+                    if denom == 0:
+                        return 'NA'
+                    return round(n / denom, 6)
+
+                wide_rows.append({
+                    'Biobank':        self.args.biobank,
+                    'Gene':           gene,
+                    'Group':          group_label,
+                    'n_pLoF':         plof['n_carriers'],
+                    'pLoF_freq':      fmt_freq(plof['n_carriers'], N),
+                    'n_damaging':     dam['n_carriers'],
+                    'damaging_freq':  fmt_freq(dam['n_carriers'], N),
+                    'n_combined':     comb_n,
+                    'combined_freq':  fmt_freq(comb_n, N),
+                    'N':              N
+                })
+
+        wide_df = pd.DataFrame(wide_rows)
+        wide_file = self.output_dir / "gene_carrier_frequency_wide.tsv"
+        wide_df.to_csv(wide_file, sep='\t', index=False)
+        print(f"  Saved wide-format frequency table: {wide_file}")
+
+        # ── Print a preview ──────────────────────────────────────────────────
+        print("\nFrequency table preview (All Cases / All Controls):")
+        preview = wide_df[wide_df['Group'].isin(['All_Cases', 'All_Controls'])]
+        print(preview.to_string(index=False))
+
+        return long_file, wide_file
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # ClinVar / clinical significance
+    # ──────────────────────────────────────────────────────────────────────────
 
     def get_clin_sig_from_vep(self, variant_id, chromosome):
         """Get CLIN_SIG from VEP file for damaging_missense variants."""
@@ -611,6 +852,10 @@ class VariantMACPipeline:
         
         return merged_df
 
+    # ──────────────────────────────────────────────────────────────────────────
+    # MAC summary 
+    # ──────────────────────────────────────────────────────────────────────────
+
     def process_mac_results(self, cases_gcount_file, controls_gcount_file):
         """Process MAC results and create final summary with annotations and gnomAD column."""
         print("Step 4: Calculating MAC and creating summary...")
@@ -649,13 +894,17 @@ class VariantMACPipeline:
                 lambda x: self.group_annotations.get(x, 'unknown')
             )
 
+            merged_df['Gene'] = merged_df['ID'].map(
+                lambda x: self.variant_to_gene.get(x, 'unknown')
+            )
+
             # Add ClinVar clinical significance
             merged_df = self.add_clinical_significance(merged_df)
 
             # Reorder columns
             gnomad_column_name = f"gnomAD_AF_{self.args.sequencing_type.upper()}"
-            column_order = ['#CHROM', 'ID', 'REF', 'ALT', 'Annotation', 'MAC_Case', 'MAC_Control', 
-                          gnomad_column_name, 'ClinVar_CLIN_SIG']
+            column_order = ['#CHROM', 'ID', 'REF', 'ALT', 'Gene', 'Annotation',
+                            'MAC_Case', 'MAC_Control', gnomad_column_name, 'ClinVar_CLIN_SIG']
             merged_df = merged_df[column_order]
 
             # Save results
@@ -681,47 +930,59 @@ class VariantMACPipeline:
     def run_pipeline(self):
         """Run the complete analysis pipeline."""
         print("Starting Variant MAC Pipeline...")
-        print("="*50)
-        
-        # Load VEP data
-        self.load_all_vep_data()
+        print("=" * 50)
 
-        # Load ClinVar data
+        self.load_all_vep_data()
         self.load_clinvar_data()
 
-        # Step 1: Combine group files
+        # Step 1
         variants_file = self.combine_group_files()
         if variants_file is None:
             return False
-        
-        # Step 2: Create PLINK files
-        cases_file, controls_file = self.create_plink_files()
-        
+
+        # Step 2
+        cases_file, controls_file, ancestry_keep_files = self.create_plink_files()
+
         if self.args.skip_plink:
             print("\nSkipping PLINK execution as requested")
             print("Files created:")
             print(f"  - {variants_file}")
             print(f"  - {cases_file}")
             print(f"  - {controls_file}")
+            for (anc, lbl), (fp, n) in ancestry_keep_files.items():
+                print(f"  - {fp}  (N={n})")
             return True
-        
-        # Step 3: Run PLINK commands
-        cases_gcount, controls_gcount = self.run_plink_commands(variants_file, cases_file, controls_file)
-        
+
+        # Step 3
+        cases_gcount, controls_gcount, ancestry_gcount_files = self.run_plink_commands(
+            variants_file, cases_file, controls_file, ancestry_keep_files
+        )
+
         if cases_gcount is None or controls_gcount is None:
             print("Pipeline failed at PLINK step")
             return False
-        
-        # Step 4: Process MAC results with annotations
+
+        # Step 4 — existing MAC summary
         final_output = self.process_mac_results(cases_gcount, controls_gcount)
-        
         if final_output is None:
             print("Pipeline failed at MAC processing step")
             return False
-        
-        print("="*50)
+
+        # Step 5 — NEW: per-gene carrier frequency table
+        cases_n    = sum(1 for line in open(cases_file)) - 1     # subtract header
+        controls_n = sum(1 for line in open(controls_file)) - 1
+
+        self.create_frequency_summary_table(
+            cases_gcount, controls_gcount,
+            ancestry_gcount_files,
+            cases_n, controls_n
+        )
+
+        print("=" * 50)
         print("Pipeline completed successfully!")
-        print(f"Final output: {final_output}")
+        print(f"Variant-level MAC summary : {final_output}")
+        print(f"Gene frequency table (long): {self.output_dir / 'gene_carrier_frequency_table.tsv'}")
+        print(f"Gene frequency table (wide): {self.output_dir / 'gene_carrier_frequency_wide.tsv'}")
         return True
 
 
@@ -738,11 +999,10 @@ def check_dependencies():
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Variant MAC Pipeline - Extract variants, variant annotations, gnomad column, ClinVar clinical significance process phenotypes, run PLINK, and calculate MAC",
+        description="Variant MAC Pipeline — MAC, frequencies, and ancestry-stratified carrier tables",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # WES data with VEP files (default)
   python3 variant_mac_pipeline.py \\
     --group-files cancer_genes.*.txt \\
     --vep-files vep_gene1.txt vep_gene2.txt \\
@@ -750,138 +1010,85 @@ Examples:
     --sequencing-type WES \\
     --phenotype-file phenotypes.csv \\
     --bfile /path/to/plink_files \\
-    --output-dir results/
-
-  # WGS data with VEP files
-  python3 variant_mac_pipeline.py \\
-    --group-files cancer_genes.*.txt \\
-    --vep-files vep_gene1.txt vep_gene2.txt \\
-    --clinvar-file ClinVar_Inclusion.txt \\
-    --sequencing-type WGS \\
-    --phenotype-file phenotypes.csv \\
-    --bfile /path/to/plink_files \\
-    --output-dir results/
-
-  # Using a directory of group files
-  python3 variant_mac_pipeline.py \\
-    --group-dir /path/to/group/files/ \\
-    --vep-files /path/to/vep/*.txt \\
-    --clinvar-file /path/to/clinvar.txt \\
-    --sequencing-type WES \\
-    --phenotype-file phenotypes.csv \\
-    --bfile /path/to/plink_files \\
+    --biobank PMBB \\
+    --ancestry-column ancestry \\
     --output-dir results/
         """
     )
-    
-    # Group files - either specific files or directory
+
     group_args = parser.add_mutually_exclusive_group(required=True)
-    group_args.add_argument(
-        "--group-files", 
-        nargs="+", 
-        help="Group files containing variants (supports wildcards like *.txt)"
-    )
-    group_args.add_argument(
-        "--group-dir", 
-        help="Directory containing group files (will use all .txt files)"
-    )
-    
-    # VEP files
-    parser.add_argument(
-        "--vep-files",
-        nargs="*",
-        help="VEP annotation files (optional - supports multiple files)"
-    )
+    group_args.add_argument("--group-files", nargs="+",
+                            help="Group files containing variants (supports wildcards)")
+    group_args.add_argument("--group-dir",
+                            help="Directory containing group files (all .txt files)")
 
-    # ClinVar file
-    parser.add_argument(
-        "--clinvar-file",
-        help="ClinVar file for clinical significance annotation (optional)"
-    )
+    parser.add_argument("--vep-files", nargs="*",
+                        help="VEP annotation files (optional)")
+    parser.add_argument("--clinvar-file",
+                        help="ClinVar file for clinical significance annotation (optional)")
+    parser.add_argument("--sequencing-type", choices=['WES', 'WGS', 'wes', 'wgs'],
+                        default='WES',
+                        help="Sequencing type: WES=gnomADe_AF, WGS=gnomADg_AF (default: WES)")
 
-    # Sequencing type for gnomAD column =
-    parser.add_argument(
-        "--sequencing-type",
-        choices=['WES', 'WGS', 'wes', 'wgs'],
-        default='WES',
-        help="Sequencing type to determine gnomAD column (WES=gnomADe_AF, WGS=gnomADg_AF, default: WES)"
-    )
+    parser.add_argument("--phenotype-file", required=True,
+                        help="Phenotype file (CSV/TSV) with case/control status")
+    parser.add_argument("--bfile", required=True,
+                        help="PLINK binary file prefix (no .bed/.bim/.fam)")
+    parser.add_argument("--output-dir", required=True,
+                        help="Output directory for results")
 
-    # Required arguments
-    parser.add_argument(
-        "--phenotype-file", 
-        required=True,
-        help="Phenotype file (CSV/TSV) with case/control status"
-    )
-    parser.add_argument(
-        "--bfile", 
-        required=True,
-        help="PLINK binary file prefix (without .bed/.bim/.fam extension)"
-    )
-    parser.add_argument(
-        "--output-dir", 
-        required=True,
-        help="Output directory for results"
-    )
-    
-    parser.add_argument(
-        "--case-column", 
-        default="HCC_Cancer_Free",
-        help="Column name for case/control status (default: HCC_Cancer_Free)"
-    )
-    parser.add_argument(
-        "--id-column", 
-        default="person_id",
-        help="Column name for individual IDs (default: person_id)"
-    )
-    
-    # Flags
-    parser.add_argument(
-        "--skip-plink", 
-        action="store_true",
-        help="Skip PLINK execution (for testing)"
-    )
-    parser.add_argument(
-        "--version", 
-        action="version", 
-        version="Variant MAC Pipeline v1.0"
-    )
-    
+    parser.add_argument("--case-column", default="HCC_Cancer_Free",
+                        help="Column for case/control status (default: HCC_Cancer_Free)")
+    parser.add_argument("--id-column", default="person_id",
+                        help="Column for individual IDs (default: person_id)")
+
+    # NEW argument
+    parser.add_argument("--biobank", required=True,
+                        help="Biobank name to label output rows (e.g. PMBB, AOU, Mayo, MVP)")
+
+    parser.add_argument("--ancestry-column", default="ancestry",
+                        help="Column for ancestry labels (e.g. EUR, AFR, AMR) used to "
+                             "produce ancestry-stratified frequency tables "
+                             "(default: ancestry). Set to empty string to skip.")
+
+    parser.add_argument("--skip-plink", action="store_true",
+                        help="Skip PLINK execution (for testing)")
+    parser.add_argument("--version", action="version",
+                        version="Variant MAC Pipeline v2.0")
+
     args = parser.parse_args()
-    
-    # Show what we're doing
-    print("Variant MAC Pipeline")
+
+    # Normalise: empty string -> None for ancestry column
+    if args.ancestry_column == '':
+        args.ancestry_column = None
+
+    print("Variant MAC Pipeline v2.0")
     print("=" * 50)
     print("Settings:")
     if args.group_files:
-        print(f"  Group files: {args.group_files}")
+        print(f"  Group files:      {args.group_files}")
     else:
-        print(f"  Group directory: {args.group_dir}")
-
+        print(f"  Group directory:  {args.group_dir}")
     if args.vep_files:
-        print(f"  VEP files: {args.vep_files}")
-        print(f"  Sequencing type: {args.sequencing_type} ({'gnomADe_AF' if args.sequencing_type.upper() == 'WES' else 'gnomADg_AF'})")
+        col = 'gnomADe_AF' if args.sequencing_type.upper() == 'WES' else 'gnomADg_AF'
+        print(f"  VEP files:        {args.vep_files}")
+        print(f"  Sequencing type:  {args.sequencing_type} ({col})")
     else:
-        print("  VEP files: None (will skip VEP annotations)")
-
-    if args.clinvar_file:
-        print(f"  ClinVar file: {args.clinvar_file}")
-    else:
-        print("  ClinVar file: None (will skip ClinVar annotations)")
-
-    print(f"  Phenotype file: {args.phenotype_file}")
-    print(f"  PLINK bfile: {args.bfile}")
+        print("  VEP files:        None")
+    print(f"  ClinVar file:     {args.clinvar_file or 'None'}")
+    print(f"  Phenotype file:   {args.phenotype_file}")
+    print(f"  PLINK bfile:      {args.bfile}")
     print(f"  Output directory: {args.output_dir}")
-    print(f"  Case column: {args.case_column}")
-    print(f"  ID column: {args.id_column}")
-    print(f"  Skip PLINK: {args.skip_plink}")
+    print(f"  Case column:      {args.case_column}")
+    print(f"  ID column:        {args.id_column}")
+    print(f"  Biobank:          {args.biobank}")
+    print(f"  Ancestry column:  {args.ancestry_column or '(none)'}")
+    print(f"  Skip PLINK:       {args.skip_plink}")
     print()
-    
-    # Check dependencies
+
     if not check_dependencies():
         sys.exit(1)
-    
-    # Run pipeline
+
     try:
         pipeline = VariantMACPipeline(args)
         success = pipeline.run_pipeline()
@@ -898,5 +1105,4 @@ Examples:
 
 if __name__ == "__main__":
     main()
-
 
