@@ -73,13 +73,29 @@ class VariantMACPipeline:
 
         Handles naming patterns like:
           cancer_genes.BRCA2.txt  ->  BRCA2
+          cancer_genes.chr2.txt   ->  MSH6  (via CHR_TO_GENE lookup)
           BRCA2_groupfile.txt     ->  BRCA2_groupfile
         Falls back to the full stem if no dot-separated gene can be identified.
         """
-        stem = Path(file_path).stem          # e.g. "cancer_genes.BRCA2"
+        CHR_TO_GENE = {
+            '2':  'MSH6',
+            '7':  'PMS2',
+            '13': 'BRCA2',
+            '16': 'FANCA',
+            '17': 'BRIP1',
+            '22': 'CHEK2',
+        }
+
+        stem = Path(file_path).stem          # e.g. "cancer_genes.chr2"
         parts = stem.split('.')
         if len(parts) >= 2:
-            return parts[-1]                 # rightmost dot-separated token
+            token = parts[-1]                # rightmost dot-separated token
+            # If the token looks like a chromosome identifier, map it to a gene name
+            chr_match = re.match(r'^chr[_\s]?(\d+|X|Y|MT)$', token, re.IGNORECASE)
+            if chr_match:
+                chr_num = chr_match.group(1)
+                return CHR_TO_GENE.get(chr_num, token)
+            return token
         return stem
 
 
