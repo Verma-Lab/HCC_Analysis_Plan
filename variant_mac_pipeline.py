@@ -95,6 +95,8 @@ class VariantMACPipeline:
             if chr_match:
                 chr_num = chr_match.group(1)
                 return CHR_TO_GENE.get(chr_num, token)
+            if token.isdigit():
+                return CHR_TO_GENE.get(token, token)
             return token
         return stem
 
