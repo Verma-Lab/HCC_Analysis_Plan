@@ -839,9 +839,10 @@ class VariantMACPipeline:
             chromosome = str(row['#CHROM'])
             
             if annotation == 'pLoF':
-                # Look up in ClinVar data
-                if variant_id in self.clinvar_data:
-                    clin_sig = self.clinvar_data[variant_id]['clinical_significance']
+                # Convert variants with ":" separator to "_" separator for ClinVar lookup
+                clinvar_variant_id = variant_id.replace(':', '_')
+                if clinvar_variant_id in self.clinvar_data:
+                    clin_sig = self.clinvar_data[clinvar_variant_id]['clinical_significance']
                     clin_sig_values.append(clin_sig)
                 else:
                     clin_sig_values.append('NOT_FOUND_IN_CLINVAR')
