@@ -425,8 +425,17 @@ class VariantMACPipeline:
             overall_anno_counts[anno] = overall_anno_counts.get(anno, 0) + 1
         print(f"  Overall annotation distribution: {dict(overall_anno_counts)}")
 
+        if 'damaging_missense' not in overall_anno_counts:
+            print(
+                "\n  WARNING: No variants with annotation 'damaging_missense' were found "
+                "in any group file. The frequency table will show 0 damaging missense "
+                "carriers for all genes. If this is unexpected, check that your group files "
+                "use the exact label 'damaging_missense' (not e.g. 'damaging'). "
+                f"Annotation labels found: {list(overall_anno_counts.keys())}\n"
+            )
+            
         return output_file
-    
+        
     # ──────────────────────────────────────────────────────────────────────────
     # PLINK keep-file creation (overall + ancestry-stratified)
     # ──────────────────────────────────────────────────────────────────────────
